@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+traces/*.jsonl
+patches/*.json
+worktree/*
+!traces/.gitkeep
+!patches/.gitkeep
+!worktree/.gitkeep
