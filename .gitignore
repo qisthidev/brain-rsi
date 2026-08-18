@@ -12,3 +12,5 @@ worktree/*
 !worktree/.gitkeep
 ingest/*
 !ingest/.gitkeep
+brains/*
+!brains/.gitkeep

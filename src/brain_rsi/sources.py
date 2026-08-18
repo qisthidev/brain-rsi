@@ -62,8 +62,12 @@ SECRET_FILENAME_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 SECRET_CONTENT_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(pattern)
     for pattern in (
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
-        r"\bsk-(proj-|ant-)?[A-Za-z0-9_\-]{20,}",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|-----BEGIN [A-Z ]*PRIVATE KEY-----",
+        # OpenAI / Anthropic / LiteLLM-style keys: long unhyphenated base62 tail. Slugs such as
+        # "sk-normalisasi-jpoint-2026" (Indonesian SK documents) have short segments and do not match.
+        r"\bsk-proj-[A-Za-z0-9_\-]{40,}",
+        r"\bsk-ant-[a-z0-9]+-[A-Za-z0-9_\-]{40,}",
+        r"\bsk-(?:[A-Za-z0-9]+-)?[A-Za-z0-9]{20,}\b",
         r"\bgh[pousr]_[A-Za-z0-9]{30,}",
         r"\bgithub_pat_[A-Za-z0-9_]{30,}",
         r"\bxox[abprs]-[A-Za-z0-9\-]{10,}",
@@ -72,14 +76,16 @@ SECRET_CONTENT_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"\bglpat-[A-Za-z0-9_\-]{20,}",
         r"\bhf_[A-Za-z0-9]{30,}",
         r"\btskey-[A-Za-z0-9\-]{20,}",
-        r"(?i)\b(api[_-]?key|api[_-]?token|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd)\b\s*[:=]\s*['\"]?[A-Za-z0-9_\-/+=.]{16,}",
-        r"(?i)\bbearer\s+[A-Za-z0-9_\-.=]{24,}",
+        r"\beyJ[A-Za-z0-9_\-]{20,}\.eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}",
+        r"(?i)\b(api[_-]?key|api[_-]?token|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd)\b\s*[:=]\s*['\"]?[A-Za-z0-9][A-Za-z0-9_\-/+=.]{15,}",
+        r"(?i)\bbearer\s+[A-Za-z0-9][A-Za-z0-9_\-.=]{23,}",
         # Hardcoded fallbacks such as os.environ.get("X_TOKEN", "literal") or TOKEN", "literal"
-        r"(?i)(token|secret|passw(or)?d|api[_-]?key|private[_-]?key)[A-Za-z0-9_\-]*[\"']\s*[,:=]\s*[\"'][A-Za-z0-9_\-/+=.]{16,}[\"']",
+        r"(?i)(token|secret|passw(or)?d|api[_-]?key|private[_-]?key)[A-Za-z0-9_\-]*[\"']\s*[:=]\s*[\"'][A-Za-z0-9][A-Za-z0-9_\-/+=.]{15,}[\"']",
+        r"(?i)(environ\.get|getenv|\.get)\(\s*[\"'][A-Za-z0-9_]*(token|secret|passw(or)?d|api[_-]?key)[A-Za-z0-9_]*[\"']\s*,\s*[\"'][A-Za-z0-9][A-Za-z0-9_\-/+=.]{15,}[\"']",
         # Documented literal tokens: "bearer token: `value`" / "token is `value`"
-        r"(?i)\b(bearer\s+token|api[_-]?key|access[_-]?token|secret)\b[^\n`\"']{0,30}[`\"'][A-Za-z0-9_\-+=]{16,}[`\"']",
-        # Long bare hex blobs next to a credential word
-        r"(?i)(token|secret|api[_-]?key)[^\n]{0,40}\b[0-9a-f]{32,}\b",
+        r"(?i)\b(bearer\s+token|api[_-]?key|access[_-]?token|secret)\b[^\n`\"']{0,30}[`\"'][A-Za-z0-9][A-Za-z0-9_\-+=]{15,}[`\"']",
+        # Long hex blobs assigned to a credential word
+        r"(?i)\b(token|secret|api[_-]?key)\b\s*[\"']?\s*[:=]\s*[\"']?[0-9a-f]{32,}\b",
         r"://[^/\s:@]+:[^/\s:@]{6,}@[^/\s]+",
     )
 )
@@ -99,9 +105,14 @@ class SourceSpec:
     denylist: tuple[str, ...] = ()
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES
     notes: tuple[str, ...] = field(default_factory=tuple)
+    # Original external repository this source was migrated from (read-only provenance).
+    legacy_path: Path | None = None
 
     def resolved_path(self) -> Path:
         return self.path.expanduser()
+
+    def resolved_legacy_path(self) -> Path | None:
+        return None if self.legacy_path is None else self.legacy_path.expanduser()
 
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
@@ -128,8 +139,40 @@ def is_secret_filename(name: str) -> bool:
 
 
 _PLACEHOLDER_RE = re.compile(
-    r"(?i)(your|dein|deine|hier|sicheres?|example|placeholder|changeme|redacted|dummy|sample|xxx|<[^>]+>|\$\{?[A-Z_]+\}?)"
+    r"(?i)(your|dein|deine|hier|sicheres?|example|placeholder|changeme|redacted|dummy|sample|xxx|"
+    r"os\.environ|<[^>]+>|\$\{?[A-Z_]+\}?|[:=]\s*['\"`]?[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_.]*['\"`]?\s*$)"
 )
+
+REDACTION_MARK = "[REDACTED-BY-BRAIN-RSI]"
+
+
+def _iter_secret_spans(text: str):
+    for pattern in SECRET_CONTENT_PATTERNS:
+        for match in pattern.finditer(text):
+            if pattern.pattern.startswith("(?i)") and _PLACEHOLDER_RE.search(match.group(0)):
+                continue
+            yield pattern, match
+
+
+def redact_secrets(text: str) -> tuple[str, int]:
+    """Replace every secret-looking span with REDACTION_MARK; return (text, count)."""
+    spans = sorted({(m.start(), m.end()) for _, m in _iter_secret_spans(text)})
+    if not spans:
+        return text, 0
+    merged: list[list[int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in merged:
+        pieces.append(text[cursor:start])
+        pieces.append(REDACTION_MARK)
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces), len(merged)
 
 
 def find_secret_signature(text: str) -> str | None:
@@ -138,11 +181,8 @@ def find_secret_signature(text: str) -> str | None:
     Obvious documentation placeholders (``API_KEY="your_key_here"``) do not count,
     but well-formed vendor tokens always do.
     """
-    for pattern in SECRET_CONTENT_PATTERNS:
-        for match in pattern.finditer(text):
-            if pattern.pattern.startswith("(?i)") and _PLACEHOLDER_RE.search(match.group(0)):
-                continue
-            return pattern.pattern
+    for pattern, _match in _iter_secret_spans(text):
+        return pattern.pattern
     return None
 
 
@@ -173,6 +213,10 @@ def _parse_spec(item: Any, base_dir: Path) -> SourceSpec:
 
     raw_path = Path(str(item["path"])).expanduser()
     path = raw_path if raw_path.is_absolute() else (base_dir / raw_path)
+    legacy_path: Path | None = None
+    if item.get("legacy_path"):
+        raw_legacy = Path(str(item["legacy_path"])).expanduser()
+        legacy_path = raw_legacy if raw_legacy.is_absolute() else (base_dir / raw_legacy)
 
     allowlist = tuple(normalize_prefix(v) for v in item.get("allowlist", list(TARGET_MUTABLE_ALLOWLIST)))
     if not allowlist:
@@ -199,6 +243,7 @@ def _parse_spec(item: Any, base_dir: Path) -> SourceSpec:
         denylist=denylist,
         max_file_bytes=max_bytes,
         notes=tuple(str(v) for v in item.get("notes", [])),
+        legacy_path=legacy_path,
     )
 
 

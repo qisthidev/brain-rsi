@@ -4,7 +4,7 @@ This repository evaluates proposed improvements to the sibling `brain` agent. It
 
 ## Non-negotiable boundaries
 
-1. Treat `../brain` and every path in `sources/registry.json` as read-only unless Rama explicitly authorizes a separate reviewed implementation task. `ingest` only reads.
+1. Treat `../brain` and every `path`/`legacy_path` in `sources/registry.json` as read-only unless Rama explicitly authorizes a separate reviewed implementation task. `scripts/migrate_legacy.py` and `ingest` only read; a candidate never edits `brains/<id>/` in place.
 2. Never edit `eval/`, `tests/`, scoring policy, or acceptance gates as part of the same candidate being evaluated.
 3. Never read or copy credentials, `.env*`, private keys, tokens, git credentials, or MCP configuration.
 4. Candidate mutations are limited to the allowlist in `src/brain_rsi/types.py` (or a registered source's allowlist in `sources/registry.json`, which can never override the global denylist) and occur only in an ephemeral workspace.

@@ -40,6 +40,16 @@ immutable eval/cases.json ---> deterministic scorer
 
 The candidate maker must not be able to alter `eval/`, `tests/`, scorer code, acceptance gates, traces, raw sources, credentials, git metadata, or `brain/main`.
 
+## Migrating a legacy brain into the repo (optional)
+
+An instance repository can hold the full committed content of its legacy second brains:
+
+```bash
+python3 scripts/migrate_legacy.py            # all sources; --source-id X, --dry-run available
+```
+
+For each source the script reads the git `HEAD` tree of `legacy_path` (or `path`), skips credential-like filenames, submodule stubs, symlinks and files > 50 MB, replaces secret-looking spans in text with `[REDACTED-BY-BRAIN-RSI]`, and writes `brains/<id>/` plus `brains/<id>/MIGRATION.json` (source head/remote, per-file SHA-256, skipped + redacted lists, digest). Point the registry `path` at `brains/<id>` afterwards so RSI cycles run in-repo. `brains/` is git-ignored in this public template.
+
 ## Registered sources and ingest
 
 `sources/registry.json` lists every second brain this harness may evaluate. Each entry declares its own **mutable allowlist** (prompts, operating rules, skills). Raw sources, wiki content, credentials, and tool wiring (`.env*`, `*.mcp.json`, `settings.local.json`, keys) are excluded by a global denylist that a registry entry cannot override. Relative paths resolve against the project root.
@@ -108,7 +118,9 @@ Passing is not permission to deploy. Promotion remains a manual patch/PR operati
 CLAUDE.md                 safety contract for agents working here
 eval/cases.json           immutable evaluation cases (global + per-source)
 fixtures/                 offline baseline/candidate/regression outputs
-sources/registry.json     registered second-brain sources and their allowlists
+sources/registry.json     registered second-brain sources (path, optional legacy_path, allowlists)
+brains/<id>/              optional full migrated legacy content + MIGRATION.json (ignored here)
+scripts/migrate_legacy.py read-only migration of a legacy brain's git HEAD into brains/
 ingest/<id>/              scrubbed allowlisted snapshots + manifests per source (ignored)
 src/brain_rsi/            runner, scorer, sandbox, sources, ingest, benchmark, cycle CLI
 tests/                    independent regression tests
