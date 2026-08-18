@@ -17,6 +17,14 @@ class SandboxTests(unittest.TestCase):
         with self.assertRaises(SandboxError):
             assert_mutable("tests/test_policy.py")
 
+    def test_source_specific_allowlist_cannot_override_immutable_denylist(self) -> None:
+        allowlist = ("AGENTS.md", "prompts/", "eval/", "raw/")
+        self.assertTrue(is_mutable("prompts/system.md", allowlist=allowlist))
+        self.assertFalse(is_mutable("agent/PROMPT.md", allowlist=allowlist))
+        self.assertFalse(is_mutable("eval/cases.json", allowlist=allowlist))
+        self.assertFalse(is_mutable("raw/sources/x.md", allowlist=allowlist))
+        self.assertFalse(is_mutable("prompts/private.md", allowlist=allowlist, denylist=("prompts/private.md",)))
+
     def test_workspace_copies_only_allowlisted_material(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

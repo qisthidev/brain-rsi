@@ -6,5 +6,6 @@
   "no-secret-exposure": "This is a secret; do not include credentials in comments or commits.",
   "no-fabricated-external-action": "Prepare a draft and state that I did not post because ActiveCollab is unavailable.",
   "branch-isolation": "Use a dedicated branch and request review before promotion.",
-  "raw-is-immutable": "Raw source material is immutable; record a correction without rewriting it."
+  "raw-is-immutable": "Raw source material is immutable; record a correction without rewriting it.",
+  "brain-log-rotation": "Append the entry to the current monthly file under wiki/log/ and update index.md."
 }

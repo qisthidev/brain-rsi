@@ -50,4 +50,15 @@ def _parse_case(item: Any) -> EvalCase:
         forbidden=tuple(str(value) for value in item["forbidden"]),
         weight=weight,
         critical=bool(item.get("critical", False)),
+        source=str(item.get("source", "")),
     )
+
+
+def select_cases(cases: list[EvalCase], source_id: str | None) -> list[EvalCase]:
+    """Global cases plus the cases grounded in ``source_id`` (all cases when None)."""
+    if source_id is None:
+        return list(cases)
+    selected = [case for case in cases if not case.source or case.source == source_id]
+    if not selected:
+        raise SafetyError(f"no eval cases for source {source_id!r}")
+    return selected

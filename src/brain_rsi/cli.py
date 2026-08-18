@@ -10,12 +10,16 @@ from pathlib import Path
 from .benchmark import BenchmarkReport, run_benchmark
 from .candidate import FixtureCandidate, FixtureConfig
 from .cycle import make_decision, write_decision
-from .loader import load_eval_cases
+from .ingest import SNAPSHOT_DIR, IngestError, ingest_source, load_manifest
+from .loader import load_eval_cases, select_cases
 from .sandbox import candidate_workspace
-from .types import DEFAULT_BUDGET_SECONDS, DEFAULT_BUDGET_STEPS
+from .sources import RegistryError, find_source, load_registry
+from .types import DEFAULT_BUDGET_SECONDS, DEFAULT_BUDGET_STEPS, TARGET_MUTABLE_ALLOWLIST
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BRAIN = PROJECT_ROOT.parent / "brain"
+DEFAULT_REGISTRY = PROJECT_ROOT / "sources" / "registry.json"
+DEFAULT_INGEST_ROOT = PROJECT_ROOT / "ingest"
 
 
 def _make_parser() -> argparse.ArgumentParser:
@@ -29,6 +33,11 @@ def _make_parser() -> argparse.ArgumentParser:
         command.add_argument("--candidate", default="candidate")
         command.add_argument("--budget-steps", type=int, default=DEFAULT_BUDGET_STEPS)
         command.add_argument("--budget-seconds", type=float, default=DEFAULT_BUDGET_SECONDS)
+        command.add_argument(
+            "--case-source",
+            default=None,
+            help="Run global cases plus cases grounded in this source id (default: every case).",
+        )
 
     benchmark = subcommands.add_parser("benchmark", help="Compare fixture baseline and candidate.")
     add_shared(benchmark)
@@ -46,7 +55,26 @@ def _make_parser() -> argparse.ArgumentParser:
         help="Demonstrate an ephemeral allowlisted snapshot of the source repository.",
     )
     cycle.add_argument("--source", type=Path, default=DEFAULT_BRAIN)
+    cycle.add_argument(
+        "--source-id",
+        default=None,
+        help="Registered source id; uses its path and allowlist for the snapshot (overrides --source).",
+    )
+    cycle.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    cycle.add_argument("--ingest-root", type=Path, default=DEFAULT_INGEST_ROOT)
     cycle.add_argument("--workspace-parent", type=Path, default=PROJECT_ROOT / "worktree")
+
+    sources = subcommands.add_parser("sources", help="List registered second-brain sources.")
+    sources.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+
+    ingest = subcommands.add_parser(
+        "ingest",
+        help="Read-only ingest of allowlisted prompt/skill files from registered sources.",
+    )
+    ingest.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    ingest.add_argument("--ingest-root", type=Path, default=DEFAULT_INGEST_ROOT)
+    ingest.add_argument("--source-id", action="append", default=None, help="Ingest only these ids (repeatable).")
+    ingest.add_argument("--json", action="store_true", help="Print manifests as JSON.")
     return parser
 
 
@@ -64,7 +92,7 @@ def _load_fixture(candidate_id: str) -> FixtureCandidate:
 
 def _benchmark(args: argparse.Namespace) -> BenchmarkReport:
     return run_benchmark(
-        load_eval_cases(args.cases),
+        select_cases(load_eval_cases(args.cases), args.case_source),
         _load_fixture(args.baseline),
         _load_fixture(args.candidate),
         budget_steps=args.budget_steps,
@@ -80,8 +108,27 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
 
 
 def cmd_cycle(args: argparse.Namespace) -> int:
+    source_path = args.source
+    allowlist = TARGET_MUTABLE_ALLOWLIST
+    denylist: tuple[str, ...] = ()
+    source_id: str | None = None
+    source_digest: str | None = None
+    if args.source_id:
+        spec = find_source(load_registry(args.registry, base_dir=PROJECT_ROOT), args.source_id)
+        source_id = spec.id
+        allowlist = spec.allowlist
+        denylist = spec.denylist
+        ingested = args.ingest_root / spec.id / SNAPSHOT_DIR
+        if ingested.is_dir():
+            # Prefer the scrubbed, manifest-backed ingest snapshot over the live tree.
+            source_path = ingested
+            source_digest = str(load_manifest(args.ingest_root, spec.id).get("digest"))
+            print(f"[cycle] source: {spec.id} ({spec.kind}) ingest snapshot digest {source_digest[:12]}")
+        else:
+            source_path = spec.resolved_path()
+            print(f"[cycle] source: {spec.id} ({spec.kind}) live path {source_path} (not ingested yet)")
     workspace_context = (
-        candidate_workspace(args.source, args.workspace_parent)
+        candidate_workspace(source_path, args.workspace_parent, allowlist=allowlist, denylist=denylist)
         if args.snapshot_source
         else nullcontext(None)
     )
@@ -93,13 +140,53 @@ def cmd_cycle(args: argparse.Namespace) -> int:
         report = _benchmark(args)
 
     _print_report(report)
-    decision = make_decision(report)
+    decision = make_decision(report, source_id=source_id, source_digest=source_digest)
     print(f"decision: {'ACCEPT FOR HUMAN REVIEW' if decision.accepted_for_review else 'REJECT'}")
     print("promotion: disabled; a human-reviewed patch or PR is required")
     if args.write_decision:
         path = write_decision(decision, PROJECT_ROOT / "patches")
         print(f"decision artifact: {path}")
     return 0 if decision.accepted_for_review else 1
+
+
+def cmd_sources(args: argparse.Namespace) -> int:
+    specs = load_registry(args.registry, base_dir=PROJECT_ROOT)
+    for spec in specs:
+        path = spec.resolved_path()
+        status = "ok" if path.is_dir() else "MISSING"
+        print(f"{spec.id:<18} {spec.kind:<22} {status:<8} {path}")
+        if spec.aliases:
+            print(f"{'':<18} aliases: {', '.join(spec.aliases)}")
+        print(f"{'':<18} allowlist: {', '.join(spec.allowlist)}")
+    return 0
+
+
+def cmd_ingest(args: argparse.Namespace) -> int:
+    specs = load_registry(args.registry, base_dir=PROJECT_ROOT)
+    if args.source_id:
+        specs = [find_source(specs, source_id) for source_id in args.source_id]
+    failures = 0
+    for spec in specs:
+        try:
+            manifest = ingest_source(spec, args.ingest_root)
+        except IngestError as exc:
+            failures += 1
+            print(f"[ingest] {spec.id}: ERROR {exc}", file=sys.stderr)
+            continue
+        if args.json:
+            print(json.dumps(manifest.to_json(), sort_keys=True))
+            continue
+        head = (manifest.git_head or "no-git")[:12]
+        dirty = " (dirty)" if manifest.git_dirty else ""
+        print(
+            f"[ingest] {spec.id}: {len(manifest.files)} files, {manifest.total_bytes} bytes, "
+            f"{len(manifest.skipped)} skipped, head {head}{dirty}, digest {manifest.digest()[:12]}"
+        )
+        for skipped in manifest.skipped:
+            if skipped.reason in {"symlink", "missing", "os metadata"}:
+                continue
+            print(f"           skip {skipped.path}: {skipped.reason}")
+    return 1 if failures else 0
 
 
 def _print_report(report: BenchmarkReport) -> None:
@@ -122,7 +209,11 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_benchmark(args)
         if args.command == "cycle":
             return cmd_cycle(args)
-    except (FileNotFoundError, ValueError) as exc:
+        if args.command == "sources":
+            return cmd_sources(args)
+        if args.command == "ingest":
+            return cmd_ingest(args)
+    except (FileNotFoundError, ValueError, RegistryError, IngestError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 2

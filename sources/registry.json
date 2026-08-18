@@ -1,0 +1,24 @@
+{
+  "$schema_note": "Registered second-brain sources for RSI evaluation. Only allowlisted agent-facing files (prompts, operating rules, skills) are ever ingested or mutated. raw/, wiki content, credentials, and tool wiring are excluded by the global denylist in src/brain_rsi/sources.py. Relative paths resolve against the project root.",
+  "sources": [
+    {
+      "id": "brain",
+      "path": "../brain",
+      "kind": "seahare-llm-wiki",
+      "description": "Sibling Seahare LLM wiki (Karpathy pattern). Primary RSI target.",
+      "allowlist": [
+        "AGENTS.md",
+        "CONTEXT.md",
+        "agent/PROMPT.md",
+        "agent/RUNBOOK.md",
+        "agent/AGENT-OPERATING-LOOP.md",
+        "prompts/",
+        "templates/",
+        ".claude/skills/",
+        ".agents/skills/"
+      ],
+      "denylist": ["agent/state/"],
+      "notes": ["wiki/ and raw/ are content, never part of the mutable surface."]
+    }
+  ]
+}

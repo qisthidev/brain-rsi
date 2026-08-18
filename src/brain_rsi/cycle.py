@@ -23,9 +23,16 @@ class CycleDecision:
     budget_violations: list[str]
     promotion: str
     created_at: str
+    source_id: str | None = None
+    source_digest: str | None = None
 
 
-def make_decision(report: BenchmarkReport) -> CycleDecision:
+def make_decision(
+    report: BenchmarkReport,
+    *,
+    source_id: str | None = None,
+    source_digest: str | None = None,
+) -> CycleDecision:
     return CycleDecision(
         run_id=report.run_id,
         baseline_id=report.baseline_id,
@@ -39,6 +46,8 @@ def make_decision(report: BenchmarkReport) -> CycleDecision:
         budget_violations=report.budget_violations(),
         promotion="human-reviewed patch or pull request required; never automatic",
         created_at=datetime.now(timezone.utc).isoformat(),
+        source_id=source_id,
+        source_digest=source_digest,
     )
 
 
