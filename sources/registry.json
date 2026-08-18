@@ -1,5 +1,5 @@
 {
-  "$schema_note": "Registered second-brain sources for RSI evaluation. Only allowlisted agent-facing files (prompts, operating rules, skills) are ever ingested or mutated. raw/, wiki content, credentials, and tool wiring are excluded by the global denylist in src/brain_rsi/sources.py. Relative paths resolve against the project root.",
+  "$schema_note": "Registered second-brain sources for RSI evaluation. `path` is the tree RSI runs against; an instance repo may set it to an in-repo copy under brains/<id>/ produced by scripts/migrate_legacy.py and keep the external origin in `legacy_path` (read-only). Only allowlisted agent-facing files are ever mutated; raw/, wiki content, credentials, and tool wiring are excluded by the global denylist in src/brain_rsi/sources.py. Relative paths resolve against the project root.",
   "sources": [
     {
       "id": "brain",
@@ -17,8 +17,12 @@
         ".claude/skills/",
         ".agents/skills/"
       ],
-      "denylist": ["agent/state/"],
-      "notes": ["wiki/ and raw/ are content, never part of the mutable surface."]
+      "denylist": [
+        "agent/state/"
+      ],
+      "notes": [
+        "wiki/ and raw/ are content, never part of the mutable surface."
+      ]
     }
   ]
 }

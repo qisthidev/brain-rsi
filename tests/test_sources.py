@@ -6,7 +6,9 @@ import unittest
 from pathlib import Path
 
 from brain_rsi.sources import (
+    REDACTION_MARK,
     RegistryError,
+    redact_secrets,
     find_secret_signature,
     find_source,
     is_globally_denied,
@@ -85,6 +87,22 @@ class SecretHeuristicTests(unittest.TestCase):
         self.assertIsNone(find_secret_signature('["security","find-generic-password","-s","GEMINI_API_KEY","-w"]'))
         self.assertIsNone(find_secret_signature("commit 440650b fixed the token parser"))
         self.assertIsNone(find_secret_signature("the shared secret defined in `docker-compose.yml` is read at boot"))
+        # Indonesian SK document slugs and jq/env references are not keys.
+        self.assertIsNone(find_secret_signature("[[sk-normalisasi-jpoint-2026-06-22]] and sk-fasilitas-cicilan-laptop-karyawan-2026-06-23"))
+        self.assertIsNone(find_secret_signature("api_key: os.environ/FRIENDLI_KEY"))
+        self.assertIsNone(find_secret_signature("access_token: .tokens.access_token"))
+        self.assertIsNone(find_secret_signature("const password = configAuth.password || '';"))
+        self.assertIsNone(find_secret_signature('actions = ["api_key_create", "api_key_delete", "mcp_key_create_something"]'))
+        self.assertIsNone(find_secret_signature('{"title": "Secret of Camera Angles", "id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0"}'))
+        self.assertIsNotNone(find_secret_signature("sk-dhaniar-AyFDNt1UW4Lq9ZxPmT2vRb8K"))
+        self.assertIsNotNone(find_secret_signature("sk-" + "A1b2" * 12))
+
+    def test_redaction_keeps_surrounding_text(self) -> None:
+        text = "before ghp_" + "a" * 36 + " middle sk-fasilitas-cicilan-2026 after"
+        redacted, count = redact_secrets(text)
+        self.assertEqual(count, 1)
+        self.assertEqual(redacted, f"before {REDACTION_MARK} middle sk-fasilitas-cicilan-2026 after")
+        self.assertEqual(redact_secrets("nothing here"), ("nothing here", 0))
         self.assertIsNone(find_secret_signature('API_KEY="llmw_dein_api_key_hier_einfuegen"'))
         self.assertIsNone(find_secret_signature("api_key: <YOUR_KEY_HERE_PLEASE>"))
         self.assertIsNone(find_secret_signature("security find-generic-password -s GEMINI_API_KEY -w"))
