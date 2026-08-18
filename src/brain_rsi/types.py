@@ -34,6 +34,7 @@ class EvalCase:
     forbidden: tuple[str, ...]
     weight: float = 1.0
     critical: bool = False
+    source: str = ""  # registered source id this case is grounded in; "" = global
 
 
 @dataclass(frozen=True)

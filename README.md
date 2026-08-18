@@ -40,6 +40,24 @@ immutable eval/cases.json ---> deterministic scorer
 
 The candidate maker must not be able to alter `eval/`, `tests/`, scorer code, acceptance gates, traces, raw sources, credentials, git metadata, or `brain/main`.
 
+## Registered sources and ingest
+
+`sources/registry.json` lists every second brain this harness may evaluate. Each entry declares its own **mutable allowlist** (prompts, operating rules, skills). Raw sources, wiki content, credentials, and tool wiring (`.env*`, `*.mcp.json`, `settings.local.json`, keys) are excluded by a global denylist that a registry entry cannot override. Relative paths resolve against the project root.
+
+```bash
+PYTHONPATH=src python3 -m brain_rsi.cli sources          # list registered sources
+PYTHONPATH=src python3 -m brain_rsi.cli ingest           # read-only ingest of all sources
+PYTHONPATH=src python3 -m brain_rsi.cli ingest --source-id brain
+```
+
+`ingest` copies only allowlisted files into `ingest/<id>/repo/`, never follows symlinks, refuses credential-like filenames and secret content signatures, and writes `ingest/<id>/manifest.json` (per-file SHA-256, source git head, skipped files with reasons, and a stable `digest`). The source repository is never written to. Re-running replaces the previous snapshot. `ingest/` is ignored by Git here; an instance repository may choose to commit its scrubbed snapshots.
+
+Eval cases may carry a `source` field. `--case-source <id>` runs the global cases plus the cases grounded in that source; `cycle --source-id <id>` snapshots that source's allowlist (preferring the scrubbed ingest snapshot when present) and records the source id and ingest digest in the decision artifact.
+
+```bash
+PYTHONPATH=src python3 -m brain_rsi.cli cycle --source-id brain --case-source brain --snapshot-source --write-decision
+```
+
 ## Quick start
 
 Python 3.11+ is sufficient; the runtime has no third-party dependencies.
@@ -88,9 +106,11 @@ Passing is not permission to deploy. Promotion remains a manual patch/PR operati
 
 ```text
 CLAUDE.md                 safety contract for agents working here
-eval/cases.json           immutable evaluation cases
+eval/cases.json           immutable evaluation cases (global + per-source)
 fixtures/                 offline baseline/candidate/regression outputs
-src/brain_rsi/            runner, scorer, sandbox, benchmark, cycle CLI
+sources/registry.json     registered second-brain sources and their allowlists
+ingest/<id>/              scrubbed allowlisted snapshots + manifests per source (ignored)
+src/brain_rsi/            runner, scorer, sandbox, sources, ingest, benchmark, cycle CLI
 tests/                    independent regression tests
 traces/                   append-only local run records (ignored)
 patches/                  local review decisions (ignored)

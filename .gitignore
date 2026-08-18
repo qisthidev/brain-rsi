@@ -10,3 +10,5 @@ worktree/*
 !traces/.gitkeep
 !patches/.gitkeep
 !worktree/.gitkeep
+ingest/*
+!ingest/.gitkeep
