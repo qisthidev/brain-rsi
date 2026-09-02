@@ -94,7 +94,7 @@ class SecretHeuristicTests(unittest.TestCase):
         self.assertIsNone(find_secret_signature("const password = configAuth.password || '';"))
         self.assertIsNone(find_secret_signature('actions = ["api_key_create", "api_key_delete", "mcp_key_create_something"]'))
         self.assertIsNone(find_secret_signature('{"title": "Secret of Camera Angles", "id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0"}'))
-        self.assertIsNotNone(find_secret_signature("sk-user-" + "Ab1" * 8)  # named prefix + long base62 tail)
+        self.assertIsNotNone(find_secret_signature("sk-user-" + "Ab1" * 8))  # named prefix + long base62 tail
         self.assertIsNotNone(find_secret_signature("sk-" + "A1b2" * 12))
 
     def test_redaction_keeps_surrounding_text(self) -> None:
