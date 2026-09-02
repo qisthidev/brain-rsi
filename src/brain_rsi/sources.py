@@ -64,7 +64,7 @@ SECRET_CONTENT_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     for pattern in (
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|-----BEGIN [A-Z ]*PRIVATE KEY-----",
         # OpenAI / Anthropic / LiteLLM-style keys: long unhyphenated base62 tail. Slugs such as
-        # "sk-normalisasi-jpoint-2026" (Indonesian SK documents) have short segments and do not match.
+        # "sk-policy-alpha-2026" (document slugs) have short segments and do not match.
         r"\bsk-proj-[A-Za-z0-9_\-]{40,}",
         r"\bsk-ant-[a-z0-9]+-[A-Za-z0-9_\-]{40,}",
         r"\bsk-(?:[A-Za-z0-9]+-)?[A-Za-z0-9]{20,}\b",
