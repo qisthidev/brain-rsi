@@ -111,3 +111,16 @@ class SecretHeuristicTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContractConsistencyTests(unittest.TestCase):
+    def test_types_defaults_match_registry_target(self) -> None:
+        from brain_rsi.sources import load_registry
+        from brain_rsi.types import TARGET_MUTABLE_ALLOWLIST, TARGET_MUTABLE_DENYLIST
+
+        root = Path(__file__).resolve().parents[1]
+        target = [s for s in load_registry(root / "sources" / "registry.json", base_dir=root) if s.is_target]
+        self.assertEqual(len(target), 1)
+        self.assertEqual(tuple(target[0].allowlist), TARGET_MUTABLE_ALLOWLIST)
+        for denied in TARGET_MUTABLE_DENYLIST:
+            self.assertIn(denied, target[0].denylist)

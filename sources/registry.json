@@ -1,14 +1,116 @@
 {
-  "$schema_note": "Registered second-brain sources for RSI evaluation. `path` is the tree RSI runs against; an instance repo may set it to an in-repo copy under brains/<id>/ produced by scripts/migrate_legacy.py and keep the external origin in `legacy_path` (read-only). Only allowlisted agent-facing files are ever mutated; raw/, wiki content, credentials, and tool wiring are excluded by the global denylist in src/brain_rsi/sources.py. Relative paths resolve against the project root.",
+  "$schema_note": "Registered second-brain sources. Exactly one source has role=target: this repository itself (path '.'), whose allowlist is the ONLY surface a candidate may mutate. Sources with role=archive are frozen earlier generations kept under brains/<id>/ (see brains/<id>/MIGRATION.json) so their lessons and raw content can be ingested; they are never RSI targets again. `legacy_path` is the original external repository, only ever read. raw/, wiki/, wikis/, credentials, and tool wiring are excluded by the global denylist in src/brain_rsi/sources.py, which no entry can override. `migrate_keep` lists the prefixes of an archive that are carried into brains/<id>/ (scripts/migrate_legacy.py, scripts/prune_archive.py); everything else stays in the archive-of-record and is recorded in MIGRATION.json `not_carried` with its sha256.",
   "sources": [
     {
+      "id": "brain-rsi",
+      "role": "target",
+      "generation": 4,
+      "path": ".",
+      "kind": "brain-unified",
+      "description": "Generation 4 (template): this repository is the brain. One knowledge base (raw/, wiki/, log/), one agent surface (agent/, .claude/skills/), one RSI harness (eval/, src/, traces/). Legacy generations 1-3 are ingested as raw material + wiki/lessons and then frozen.",
+      "remote": "git@github.com:qisthidev/brain-rsi.git",
+      "aliases": [
+        "~/brain-rsi"
+      ],
+      "allowlist": [
+        "agent/",
+        ".claude/skills/"
+      ],
+      "denylist": [
+        "CLAUDE.md",
+        "docs/",
+        "scripts/",
+        "sources/",
+        "src/",
+        "brains/",
+        "ingest/",
+        "fixtures/",
+        "patches/",
+        "worktree/",
+        "log/",
+        "proposals/"
+      ],
+      "notes": [
+        "CLAUDE.md is the safety contract, not the agent prompt; it is deliberately outside the mutable surface.",
+        "wiki/ and raw/ are content (globally denied). wiki/lessons/gen-*.md hold the distilled experience of earlier generations.",
+        "eval/ cases should be derived from real operational lessons recorded in wiki/lessons and log/.",
+        "Template: replace `remote`, `aliases` and the archive entries below with your own brains; keep the allowlist/denylist shape."
+      ]
+    },
+    {
+      "id": "personal-archive",
+      "role": "archive",
+      "generation": 1,
+      "path": "brains/personal-archive",
+      "legacy_path": "~/archive-wiki",
+      "kind": "llm-wiki-archived",
+      "description": "Generation 1 (example archive): model-agnostic LLM Wiki home. Committed HEAD still holds pre-migration raw/, wiki/, exports/, projects/.",
+      "remote": "https://git.example.com/owner/wiki.git",
+      "allowlist": [
+        "README.md",
+        "LLM-WIKI.md",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "GEMINI.md",
+        "AGENT-LAUNCH.md",
+        "AGENT-OPERATING-LOOP.md",
+        "skills/",
+        ".claude/skills/"
+      ],
+      "denylist": [
+        "projects/",
+        ".ai-bridge/",
+        ".codex/",
+        ".commandcode/",
+        ".cursor/",
+        ".kiro/",
+        ".omo/",
+        ".opencode/",
+        ".firecrawl/"
+      ],
+      "notes": [
+        "Frozen example. Point legacy_path at your own first-generation wiki or delete this entry.",
+        "Lessons: wiki/lessons/gen-1-personal-archive.md"
+      ],
+      "migrate_keep": [
+        "README.md",
+        "LLM-WIKI.md",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "GEMINI.md",
+        "AGENT-LAUNCH.md",
+        "AGENT-OPERATING-LOOP.md",
+        "TODO.md",
+        "skills/",
+        ".claude/skills/",
+        "scripts/",
+        "wiki/index.md",
+        "wiki/log.md",
+        "wiki/lazycodex-tc2-workflow.md",
+        "wiki/lessons/",
+        "wiki/synthesis/",
+        "wiki/sources/",
+        "wiki/security/",
+        "wiki/scripts/"
+      ],
+      "archive_of_record": "<frozen full copy remote> + legacy remote"
+    },
+    {
       "id": "brain",
-      "path": "../brain",
+      "role": "archive",
+      "generation": 2,
+      "path": "brains/brain",
+      "legacy_path": "~/projects/brain",
       "kind": "seahare-llm-wiki",
-      "description": "Sibling Seahare LLM wiki (Karpathy pattern). Primary RSI target.",
+      "description": "Generation 2: Seahare LLM wiki (Karpathy pattern): raw/ sources + assets, wiki/, notes, docs, scripts, agent prompts and skills. Was the primary RSI target before generation 4.",
+      "remote": "git@github.com:owner/brain.git",
+      "aliases": [
+        "../brain"
+      ],
       "allowlist": [
         "AGENTS.md",
         "CONTEXT.md",
+        "README.md",
         "agent/PROMPT.md",
         "agent/RUNBOOK.md",
         "agent/AGENT-OPERATING-LOOP.md",
@@ -18,11 +120,79 @@
         ".agents/skills/"
       ],
       "denylist": [
-        "agent/state/"
+        "agent/state/",
+        "tools/",
+        "scripts/",
+        "notes/",
+        "docs/"
       ],
       "notes": [
-        "wiki/ and raw/ are content, never part of the mutable surface."
-      ]
+        "Frozen example. Was the primary RSI target before generation 4.",
+        "Lessons: wiki/lessons/gen-2-brain-seahare.md"
+      ],
+      "migrate_keep": [
+        "AGENTS.md",
+        "CONTEXT.md",
+        "README.md",
+        "TODO.md",
+        "agent/",
+        "prompts/",
+        "templates/",
+        ".claude/skills/",
+        ".agents/skills/",
+        "scripts/wiki-linkcheck.py",
+        "scripts/wiki-index-check.py",
+        "scripts/wiki-search.sh",
+        "wiki/",
+        "docs/"
+      ],
+      "archive_of_record": "<frozen full copy remote> + legacy remote"
+    },
+    {
+      "id": "brain-client",
+      "role": "archive",
+      "generation": 3,
+      "path": "brains/brain-client",
+      "legacy_path": "~/projects/brain-client",
+      "kind": "llmwikinng-okf",
+      "description": "Generation 3 (example archive): LLMWikiNG (OKF v0.1) app fork with per-project wikis (wikis/main, wikis/client-a = client knowledge, daily log), agent config, prompts, skills, opencode commands.",
+      "remote": "git@github.com:owner/brain-client.git",
+      "aliases": [],
+      "allowlist": [
+        ".agy.yaml",
+        "prompts/",
+        "skills/",
+        ".opencode/command/"
+      ],
+      "denylist": [
+        "backend/",
+        "frontend/",
+        "static/",
+        "templates/",
+        "docker/",
+        "traffic/",
+        "lang/",
+        "tests/",
+        ".github/",
+        ".agents/",
+        ".claude/"
+      ],
+      "notes": [
+        "Frozen example. Client wikis (wikis/client-a) are content and never ingested; only prompts/skills are carried.",
+        "backend/, frontend/, docker/ etc. are the LLMWikiNG application, not brain content.",
+        "templates/ here are HTML web templates, not agent page templates.",
+        "Lessons: wiki/lessons/gen-3-brain-client.md"
+      ],
+      "migrate_keep": [
+        ".agy.yaml",
+        "prompts/",
+        "skills/",
+        ".opencode/command/",
+        "wikis/client-a/",
+        "output_docs/",
+        "memory/"
+      ],
+      "archive_of_record": "<frozen full copy remote> + legacy remote"
     }
   ]
 }

@@ -6,7 +6,12 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from typing import TYPE_CHECKING, Any
+
 from .benchmark import BenchmarkReport
+
+if TYPE_CHECKING:  # avoids an import cycle at runtime
+    from .search import SearchResult
 
 
 @dataclass(frozen=True)
@@ -21,10 +26,12 @@ class CycleDecision:
     regressions: list[str]
     critical_regressions: list[str]
     budget_violations: list[str]
+    runner_errors: list[str]
     promotion: str
     created_at: str
     source_id: str | None = None
     source_digest: str | None = None
+    search: dict[str, Any] | None = None  # tree-search summary (journal, stages, ablation, diff)
 
 
 def make_decision(
@@ -44,6 +51,7 @@ def make_decision(
         regressions=report.regressions(),
         critical_regressions=report.critical_regressions(),
         budget_violations=report.budget_violations(),
+        runner_errors=report.runner_errors(),
         promotion="human-reviewed patch or pull request required; never automatic",
         created_at=datetime.now(timezone.utc).isoformat(),
         source_id=source_id,
@@ -58,3 +66,83 @@ def write_decision(decision: CycleDecision, output_dir: Path) -> Path:
         json.dump(asdict(decision), handle, indent=2, sort_keys=True)
         handle.write("\n")
     return path
+
+
+def make_search_decision(
+    result: "SearchResult",
+    *,
+    source_id: str | None = None,
+    source_digest: str | None = None,
+    journal_path: Path | None = None,
+    minimum_delta: float = 0.01,
+    usage: dict[str, Any] | None = None,
+    models: dict[str, str] | None = None,
+    reviews: dict[str, Any] | None = None,
+    html_path: Path | None = None,
+    proposals: list[dict[str, Any]] | None = None,
+) -> CycleDecision:
+    """Decision artifact for a tree-search run: the recommended node (ablation-
+    minimised best when it keeps the score) versus the baseline root. Like
+    ``make_decision`` it only says whether the candidate qualifies for human
+    review; promotion stays manual."""
+    root = result.root
+    node = result.recommended
+    best = result.best
+    return CycleDecision(
+        run_id=result.journal.run_id,
+        baseline_id=root.candidate_id,
+        candidate_id=node.candidate_id,
+        baseline_total=root.total,
+        candidate_total=node.total,
+        max_points=root.max_points,
+        accepted_for_review=result.accepted_for_review(minimum_delta),
+        regressions=list(node.regressions),
+        critical_regressions=list(node.critical_regressions),
+        budget_violations=list(node.budget_violations),
+        runner_errors=list(node.runner_errors),
+        promotion="human-reviewed patch or pull request required; never automatic",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        source_id=source_id,
+        source_digest=source_digest,
+        search={
+            "journal_path": str(journal_path) if journal_path else None,
+            "journal": result.journal.summary(),
+            "evaluations": result.evaluations,
+            "elapsed_s": round(result.elapsed_s, 3),
+            "stopped_reason": result.stopped_reason,
+            "stages": result.stages,
+            "best_node": {
+                "id": best.id,
+                "candidate_id": best.candidate_id,
+                "kind": best.kind,
+                "total": best.total,
+                "changed_files": list(best.changed_files),
+                "change_size": best.change_size,
+                "runner_errors": list(best.runner_errors),
+                "rationale": str(best.meta.get("rationale", "")),
+            },
+            "recommended_node": {
+                "id": node.id,
+                "candidate_id": node.candidate_id,
+                "kind": node.kind,
+                "total": node.total,
+                "changed_files": list(node.changed_files),
+                "change_size": node.change_size,
+                "runner_errors": list(node.runner_errors),
+                "is_minimal": result.minimal is not None and node.id == result.minimal.id,
+                "rationale": str(node.meta.get("rationale", "")),
+                "proposal": node.meta.get("proposal"),
+            },
+            "ablation": result.ablation,
+            "policy_violations": [
+                {"node": n.id, "candidate_id": n.candidate_id, "violations": list(n.policy_violations)}
+                for n in result.journal.violation_nodes
+            ],
+            "diff": result.recommended_diff(),
+            "usage": usage,
+            "models": models,
+            "reviews": reviews,
+            "html_path": str(html_path) if html_path else None,
+            "proposals": proposals,
+        },
+    )

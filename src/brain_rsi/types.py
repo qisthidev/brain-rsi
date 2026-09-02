@@ -8,10 +8,17 @@ DEFAULT_BUDGET_STEPS = 100
 DEFAULT_BUDGET_SECONDS = 60.0
 
 # A candidate may propose changes only to these paths in its isolated workspace.
+# Mirrors sources/registry.json (source brain-v2, role target): the agent surface only.
 TARGET_MUTABLE_ALLOWLIST = (
-    "agent/PROMPT.md",
-    "CLAUDE.md",
+    "agent/",
     ".claude/skills/",
+)
+
+# CLAUDE.md is the safety contract, not the agent prompt: never mutable for the target.
+# (Archive sources may still list their own CLAUDE.md for read-only ingest, so this is a
+# target denylist, not part of the global immutable denylist below.)
+TARGET_MUTABLE_DENYLIST = (
+    "CLAUDE.md",
 )
 
 # The maker must never edit its own tests, scorer, traces, or promotion policy.
@@ -72,5 +79,6 @@ class TraceRecord:
     regressions: list[str]
     critical_regressions: list[str]
     budget_violations: list[str]
+    runner_errors: list[str]
     candidate_scores: list[ScoreResult]
     meta: dict[str, Any] = field(default_factory=dict)

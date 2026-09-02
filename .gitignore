@@ -1,16 +1,22 @@
 __pycache__/
 *.py[cod]
-.venv/
-build/
-dist/
-*.egg-info/
+/.venv/
+/build/
+/dist/
+/*.egg-info/
 traces/*.jsonl
+traces/journal/*.jsonl
+traces/journal/*.html
 patches/*.json
 worktree/*
 !traces/.gitkeep
 !patches/.gitkeep
 !worktree/.gitkeep
+# scrubbed prompt-surface snapshots are regenerable from brains/<id> via `brain-rsi ingest`
 ingest/*
 !ingest/.gitkeep
-brains/*
-!brains/.gitkeep
+.env
+.env.*
+# CommandCode CLI local state
+.commandcode/
+test-results/

@@ -92,6 +92,26 @@ SECRET_CONTENT_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 
 DEFAULT_MAX_FILE_BYTES = 512 * 1024
 
+# Media / binary document extensions that an archive never carries into this repo. They stay in
+# the archive-of-record (the legacy repository / frozen brain-v2 history) as path + sha256 only.
+NOT_CARRIED_EXTENSIONS: frozenset[str] = frozenset(
+    {".pdf", ".docx", ".doc", ".pptx", ".xlsx", ".epub", ".mobi", ".mp4", ".mov", ".mkv", ".webm",
+     ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".zip", ".tar", ".gz", ".7z", ".rar", ".bin", ".gguf",
+     ".onnx", ".pt", ".safetensors", ".iso", ".dmg", ".exe", ".dll", ".so", ".dylib", ".psd", ".ai"}
+)
+
+
+def not_carried_reason(relative_path: str, keep: tuple[str, ...]) -> str | None:
+    """Why a legacy file is recorded (path + hash) but not copied into brains/<id>/; None = carry it."""
+    rel = PurePosixPath(relative_path).as_posix()
+    if rel.rsplit("/", 1)[-1] == "MIGRATION.json":
+        return None
+    if PurePosixPath(rel).suffix.lower() in NOT_CARRIED_EXTENSIONS:
+        return "media/binary document (archive-of-record only)"
+    if keep and not any(rel == k.rstrip("/") or (k.endswith("/") and rel.startswith(k)) for k in keep):
+        return "outside migrate_keep"
+    return None
+
 
 @dataclass(frozen=True)
 class SourceSpec:
@@ -107,6 +127,16 @@ class SourceSpec:
     notes: tuple[str, ...] = field(default_factory=tuple)
     # Original external repository this source was migrated from (read-only provenance).
     legacy_path: Path | None = None
+    # "target": the one live brain whose allowlist a candidate may mutate.
+    # "archive": a frozen earlier generation, ingested for lessons/raw material, never an RSI target.
+    role: str = "target"
+    generation: int | None = None
+    # Path prefixes of the legacy tree that are carried into brains/<id>/ (empty = everything).
+    migrate_keep: tuple[str, ...] = ()
+
+    @property
+    def is_target(self) -> bool:
+        return self.role == "target"
 
     def resolved_path(self) -> Path:
         return self.path.expanduser()
@@ -116,6 +146,7 @@ class SourceSpec:
 
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+SOURCE_ROLES = ("target", "archive")
 
 
 def normalize_prefix(value: str) -> str:
@@ -198,6 +229,9 @@ def load_registry(path: str | Path, *, base_dir: Path | None = None) -> list[Sou
     ids = [spec.id for spec in specs]
     if len(ids) != len(set(ids)):
         raise RegistryError("source ids must be unique")
+    targets = [spec.id for spec in specs if spec.is_target]
+    if len(targets) > 1:
+        raise RegistryError(f"at most one source may have role 'target', got {targets}")
     return specs
 
 
@@ -227,7 +261,15 @@ def _parse_spec(item: Any, base_dir: Path) -> SourceSpec:
         if is_secret_filename(PurePosixPath(entry).name):
             raise RegistryError(f"source {source_id!r} allowlists a credential-like file: {entry!r}")
 
+    role = str(item.get("role", "target"))
+    if role not in SOURCE_ROLES:
+        raise RegistryError(f"source {source_id!r} has invalid role {role!r} (expected one of {SOURCE_ROLES})")
+    generation = item.get("generation")
+    if generation is not None and (not isinstance(generation, int) or generation < 1):
+        raise RegistryError(f"source {source_id!r} generation must be a positive integer")
+
     denylist = tuple(normalize_prefix(v) for v in item.get("denylist", []))
+    migrate_keep = tuple(normalize_prefix(v) for v in item.get("migrate_keep", []))
     max_bytes = int(item.get("max_file_bytes", DEFAULT_MAX_FILE_BYTES))
     if max_bytes <= 0:
         raise RegistryError(f"source {source_id!r} max_file_bytes must be positive")
@@ -244,6 +286,9 @@ def _parse_spec(item: Any, base_dir: Path) -> SourceSpec:
         max_file_bytes=max_bytes,
         notes=tuple(str(v) for v in item.get("notes", [])),
         legacy_path=legacy_path,
+        role=role,
+        generation=generation,
+        migrate_keep=migrate_keep,
     )
 
 

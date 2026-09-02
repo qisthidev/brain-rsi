@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Sequence
 
-from .types import TARGET_IMMUTABLE_DENYLIST, TARGET_MUTABLE_ALLOWLIST
+from .types import TARGET_IMMUTABLE_DENYLIST, TARGET_MUTABLE_ALLOWLIST, TARGET_MUTABLE_DENYLIST
 
 
 class SandboxError(Exception):
@@ -18,7 +18,7 @@ def is_mutable(
     relative_path: str | Path,
     *,
     allowlist: Sequence[str] = TARGET_MUTABLE_ALLOWLIST,
-    denylist: Sequence[str] = (),
+    denylist: Sequence[str] = TARGET_MUTABLE_DENYLIST,
 ) -> bool:
     """Return True when a path is inside the mutable allowlist.
 
@@ -40,7 +40,7 @@ def assert_mutable(
     relative_path: str | Path,
     *,
     allowlist: Sequence[str] = TARGET_MUTABLE_ALLOWLIST,
-    denylist: Sequence[str] = (),
+    denylist: Sequence[str] = TARGET_MUTABLE_DENYLIST,
 ) -> None:
     if not is_mutable(relative_path, allowlist=allowlist, denylist=denylist):
         raise SandboxError(f"path not in candidate mutation allowlist: {relative_path}")
@@ -57,7 +57,7 @@ def candidate_workspace(
     parent: Path,
     *,
     allowlist: Sequence[str] = TARGET_MUTABLE_ALLOWLIST,
-    denylist: Sequence[str] = (),
+    denylist: Sequence[str] = TARGET_MUTABLE_DENYLIST,
 ):
     """Copy only mutable target files into an ephemeral candidate workspace."""
     source = source.resolve()
