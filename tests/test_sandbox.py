@@ -10,7 +10,9 @@ from brain_rsi.sandbox import SandboxError, assert_mutable, candidate_workspace,
 class SandboxTests(unittest.TestCase):
     def test_path_allowlist(self) -> None:
         self.assertTrue(is_mutable("agent/PROMPT.md"))
+        self.assertTrue(is_mutable("agent/RUNBOOK.md"))
         self.assertTrue(is_mutable(".claude/skills/example/SKILL.md"))
+        self.assertFalse(is_mutable("CLAUDE.md"))  # safety contract, outside the surface
         self.assertFalse(is_mutable("eval/cases.json"))
         self.assertFalse(is_mutable("raw/sources/note.md"))
         self.assertFalse(is_mutable("../brain/.env"))

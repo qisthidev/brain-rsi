@@ -88,20 +88,20 @@ class SecretHeuristicTests(unittest.TestCase):
         self.assertIsNone(find_secret_signature("commit 440650b fixed the token parser"))
         self.assertIsNone(find_secret_signature("the shared secret defined in `docker-compose.yml` is read at boot"))
         # Indonesian SK document slugs and jq/env references are not keys.
-        self.assertIsNone(find_secret_signature("[[sk-normalisasi-jpoint-2026-06-22]] and sk-fasilitas-cicilan-laptop-karyawan-2026-06-23"))
+        self.assertIsNone(find_secret_signature("[[sk-policy-alpha-2026-06-22]] and sk-policy-beta-laptop-allowance-2026-06-23"))
         self.assertIsNone(find_secret_signature("api_key: os.environ/FRIENDLI_KEY"))
         self.assertIsNone(find_secret_signature("access_token: .tokens.access_token"))
         self.assertIsNone(find_secret_signature("const password = configAuth.password || '';"))
         self.assertIsNone(find_secret_signature('actions = ["api_key_create", "api_key_delete", "mcp_key_create_something"]'))
         self.assertIsNone(find_secret_signature('{"title": "Secret of Camera Angles", "id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0"}'))
-        self.assertIsNotNone(find_secret_signature("sk-dhaniar-AyFDNt1UW4Lq9ZxPmT2vRb8K"))
+        self.assertIsNotNone(find_secret_signature("sk-user-" + "Ab1" * 8))  # named prefix + long base62 tail
         self.assertIsNotNone(find_secret_signature("sk-" + "A1b2" * 12))
 
     def test_redaction_keeps_surrounding_text(self) -> None:
-        text = "before ghp_" + "a" * 36 + " middle sk-fasilitas-cicilan-2026 after"
+        text = "before ghp_" + "a" * 36 + " middle sk-policy-beta-2026 after"
         redacted, count = redact_secrets(text)
         self.assertEqual(count, 1)
-        self.assertEqual(redacted, f"before {REDACTION_MARK} middle sk-fasilitas-cicilan-2026 after")
+        self.assertEqual(redacted, f"before {REDACTION_MARK} middle sk-policy-beta-2026 after")
         self.assertEqual(redact_secrets("nothing here"), ("nothing here", 0))
         self.assertIsNone(find_secret_signature('API_KEY="llmw_dein_api_key_hier_einfuegen"'))
         self.assertIsNone(find_secret_signature("api_key: <YOUR_KEY_HERE_PLEASE>"))
@@ -111,3 +111,16 @@ class SecretHeuristicTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContractConsistencyTests(unittest.TestCase):
+    def test_types_defaults_match_registry_target(self) -> None:
+        from brain_rsi.sources import load_registry
+        from brain_rsi.types import TARGET_MUTABLE_ALLOWLIST, TARGET_MUTABLE_DENYLIST
+
+        root = Path(__file__).resolve().parents[1]
+        target = [s for s in load_registry(root / "sources" / "registry.json", base_dir=root) if s.is_target]
+        self.assertEqual(len(target), 1)
+        self.assertEqual(tuple(target[0].allowlist), TARGET_MUTABLE_ALLOWLIST)
+        for denied in TARGET_MUTABLE_DENYLIST:
+            self.assertIn(denied, target[0].denylist)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from dataclasses import asdict, dataclass, replace
@@ -41,25 +42,33 @@ class BenchmarkReport:
             if score.critical and baseline[score.case_id].passed and not score.passed
         ]
 
-    def budget_violations(self) -> list[str]:
-        violations: list[str] = []
+    def runner_errors(self) -> list[str]:
+        errors: list[str] = []
         for contender, scores in (
             (self.baseline_id, self.baseline_scores),
             (self.candidate_id, self.candidate_scores),
         ):
-            violations.extend(
-                f"{contender}:{score.case_id}"
-                for score in scores
-                if score.runner_error and "budget" in score.runner_error.casefold()
+            errors.extend(f"{contender}:{score.case_id}" for score in scores if score.runner_error)
+        return errors
+
+    def budget_violations(self) -> list[str]:
+        errors = {
+            f"{contender}:{score.case_id}"
+            for contender, scores in (
+                (self.baseline_id, self.baseline_scores),
+                (self.candidate_id, self.candidate_scores),
             )
-        return violations
+            for score in scores
+            if score.runner_error and "budget" in score.runner_error.casefold()
+        }
+        return sorted(errors)
 
     def accepted(self, *, minimum_delta: float = 0.01) -> bool:
         return (
             self.candidate_total >= self.baseline_total + minimum_delta
             and not self.regressions()
             and not self.critical_regressions()
-            and not self.budget_violations()
+            and not self.runner_errors()
         )
 
 
@@ -77,8 +86,8 @@ def run_benchmark(
         raise ValueError("budgets must be positive")
 
     run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-    baseline_outputs = _run_suite(cases, baseline, budget_steps, budget_seconds)
-    candidate_outputs = _run_suite(cases, candidate, budget_steps, budget_seconds)
+    baseline_outputs = run_suite(cases, baseline, budget_steps, budget_seconds)
+    candidate_outputs = run_suite(cases, candidate, budget_steps, budget_seconds)
     baseline_scores = [score_case(case, output) for case, output in zip(cases, baseline_outputs)]
     candidate_scores = [score_case(case, output) for case, output in zip(cases, candidate_outputs)]
     baseline_total, max_points = aggregate(baseline_scores)
@@ -100,7 +109,7 @@ def run_benchmark(
     return report
 
 
-def _run_suite(
+def run_suite(
     cases: Sequence[EvalCase],
     runner: CandidateRunner,
     budget_steps: int,
@@ -126,19 +135,70 @@ def _run_suite(
             )
             continue
 
-        output = runner.run(
-            case,
-            {
-                "budget_steps": remaining_steps,
-                "budget_seconds": remaining_seconds,
-            },
-        )
-        used_steps += max(output.steps, 0)
+        case_started = time.monotonic()
+        try:
+            output = runner.run(
+                case,
+                {
+                    "budget_steps": remaining_steps,
+                    "budget_seconds": remaining_seconds,
+                },
+            )
+        except Exception as exc:
+            output = CandidateOutput(
+                candidate_id=runner.candidate_id,
+                case_id=case.id,
+                text="",
+                elapsed_s=time.monotonic() - case_started,
+                steps=0,
+                error=f"runner raised {type(exc).__name__}",
+            )
+
+        actual_elapsed = time.monotonic() - case_started
+        if not isinstance(output, CandidateOutput):
+            output = CandidateOutput(
+                candidate_id=runner.candidate_id,
+                case_id=case.id,
+                text="",
+                elapsed_s=actual_elapsed,
+                steps=0,
+                error=f"runner returned invalid output type {type(output).__name__}",
+            )
+        else:
+            valid_steps = isinstance(output.steps, int) and not isinstance(output.steps, bool) and output.steps >= 0
+            valid_elapsed = (
+                isinstance(output.elapsed_s, (int, float))
+                and not isinstance(output.elapsed_s, bool)
+                and math.isfinite(output.elapsed_s)
+                and output.elapsed_s >= 0
+            )
+            error = output.error
+            if not valid_steps or not valid_elapsed:
+                error = _combine_errors(error, "runner returned invalid resource accounting")
+            steps = output.steps if valid_steps else 0
+            elapsed = max(float(output.elapsed_s), actual_elapsed) if valid_elapsed else actual_elapsed
+            output = replace(
+                output,
+                candidate_id=runner.candidate_id,
+                case_id=case.id,
+                elapsed_s=elapsed,
+                steps=steps,
+                error=error,
+            )
+
+        used_steps += output.steps
         if output.steps > remaining_steps or output.elapsed_s > remaining_seconds:
-            output = replace(output, error="candidate exceeded its remaining budget")
+            output = replace(output, error=_combine_errors(output.error, "candidate exceeded its remaining budget"))
         outputs.append(output)
 
     return outputs
+
+
+def _combine_errors(existing: str | None, added: str) -> str:
+    return f"{existing}; {added}" if existing else added
+
+
+_run_suite = run_suite  # backwards-compatible alias
 
 
 def _append_trace(
@@ -162,6 +222,7 @@ def _append_trace(
         regressions=report.regressions(),
         critical_regressions=report.critical_regressions(),
         budget_violations=report.budget_violations(),
+        runner_errors=report.runner_errors(),
         candidate_scores=report.candidate_scores,
         meta={"budget_steps": budget_steps, "budget_seconds": budget_seconds},
     )
