@@ -347,7 +347,7 @@ agent against a fixed suite of situations; you never see the grading key.
 
 ## Evidence about the parent
 {feedback}
-
+{reported}
 ## Earlier attempts in this run (do not repeat what already failed)
 {history}
 
@@ -429,8 +429,17 @@ class CcxMaker(Maker):
             cases=self._case_catalog(),
             files=render_files(request.parent_files),
             feedback=feedback,
+            reported=self._reported_block(request),
             history=self._history(request),
         )
+
+    @staticmethod
+    def _reported_block(request: ProposalRequest) -> str:
+        if not request.reported_failures:
+            return ""
+        lines = "\n".join(f"- {line}" for line in request.reported_failures[:20])
+        return f"\n## Failures reported from real use (fix the cause, do not special-case them)\n{lines}\n"
+
 
     # ---- Maker protocol ----
     def propose(self, request: ProposalRequest) -> Proposal | None:

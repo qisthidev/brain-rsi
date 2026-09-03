@@ -32,6 +32,11 @@ class CycleDecision:
     source_id: str | None = None
     source_digest: str | None = None
     search: dict[str, Any] | None = None  # tree-search summary (journal, stages, ablation, diff)
+    verdict: dict[str, Any] | None = None  # per-case win/loss/tie/unscored (verdict.py)
+    rejection_reason: str = ""  # empty when accepted for review
+    suite_digest: str | None = None  # sha256 of eval/cases.json the run used (CLAUDE.md rule 10)
+    batch_id: str | None = None  # failure batch (triggers.py) that opened this run, if any
+    gain: dict[str, Any] | None = None  # preregistered gain verdict vs control runs (gain.py)
 
 
 def make_decision(
@@ -39,6 +44,9 @@ def make_decision(
     *,
     source_id: str | None = None,
     source_digest: str | None = None,
+    suite_digest: str | None = None,
+    batch_id: str | None = None,
+    gain: dict[str, Any] | None = None,
 ) -> CycleDecision:
     return CycleDecision(
         run_id=report.run_id,
@@ -56,6 +64,11 @@ def make_decision(
         created_at=datetime.now(timezone.utc).isoformat(),
         source_id=source_id,
         source_digest=source_digest,
+        verdict=report.verdict().to_dict(),
+        rejection_reason=report.rejection_reason(),
+        suite_digest=suite_digest,
+        batch_id=batch_id,
+        gain=gain,
     )
 
 
@@ -80,6 +93,9 @@ def make_search_decision(
     reviews: dict[str, Any] | None = None,
     html_path: Path | None = None,
     proposals: list[dict[str, Any]] | None = None,
+    suite_digest: str | None = None,
+    batch_id: str | None = None,
+    gain: dict[str, Any] | None = None,
 ) -> CycleDecision:
     """Decision artifact for a tree-search run: the recommended node (ablation-
     minimised best when it keeps the score) versus the baseline root. Like
@@ -104,6 +120,11 @@ def make_search_decision(
         created_at=datetime.now(timezone.utc).isoformat(),
         source_id=source_id,
         source_digest=source_digest,
+        verdict=node.meta.get("verdict"),
+        rejection_reason=result.rejection_reason(minimum_delta),
+        suite_digest=suite_digest,
+        batch_id=batch_id,
+        gain=gain,
         search={
             "journal_path": str(journal_path) if journal_path else None,
             "journal": result.journal.summary(),

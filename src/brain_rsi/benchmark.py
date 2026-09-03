@@ -13,6 +13,7 @@ from typing import Any, Sequence
 from .candidate import CandidateRunner
 from .policy import aggregate, score_case
 from .types import CandidateOutput, EvalCase, ScoreResult, TraceRecord
+from .verdict import Verdict, compare
 
 
 @dataclass
@@ -63,13 +64,33 @@ class BenchmarkReport:
         }
         return sorted(errors)
 
+    def verdict(self) -> Verdict:
+        """Per-case win/loss/tie/unscored (see verdict.py)."""
+        return compare(self.baseline_scores, self.candidate_scores)
+
     def accepted(self, *, minimum_delta: float = 0.01) -> bool:
         return (
             self.candidate_total >= self.baseline_total + minimum_delta
             and not self.regressions()
             and not self.critical_regressions()
             and not self.runner_errors()
+            and self.verdict().gate()[0]  # no case may lose points; at least one must win
         )
+
+    def rejection_reason(self, *, minimum_delta: float = 0.01) -> str:
+        """Why the gate failed (empty when accepted) — feeds the commit log."""
+        if self.runner_errors():
+            return f"runner errors: {', '.join(self.runner_errors())}"
+        if self.critical_regressions():
+            return f"critical regressions: {', '.join(self.critical_regressions())}"
+        if self.regressions():
+            return f"regressions: {', '.join(self.regressions())}"
+        ok, reason = self.verdict().gate()
+        if not ok:
+            return reason
+        if self.candidate_total < self.baseline_total + minimum_delta:
+            return f"delta {self.candidate_total - self.baseline_total:+.2f} below minimum {minimum_delta}"
+        return ""
 
 
 def run_benchmark(
@@ -224,7 +245,11 @@ def _append_trace(
         budget_violations=report.budget_violations(),
         runner_errors=report.runner_errors(),
         candidate_scores=report.candidate_scores,
-        meta={"budget_steps": budget_steps, "budget_seconds": budget_seconds},
+        meta={
+            "budget_steps": budget_steps,
+            "budget_seconds": budget_seconds,
+            "verdict": report.verdict().to_dict(),
+        },
     )
 
     path = Path(traces_path)

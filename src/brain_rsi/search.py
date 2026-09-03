@@ -33,6 +33,7 @@ from .journal import CandidateNode, Journal, new_node_id
 from .policy import aggregate, score_case
 from .types import DEFAULT_BUDGET_SECONDS, DEFAULT_BUDGET_STEPS, EvalCase, ScoreResult
 from .validator import ValidationPolicy, validate_changes
+from .verdict import compare
 
 STAGE_KINDS = ("working", "tuning", "explore", "ablation")
 
@@ -94,6 +95,7 @@ class ProposalRequest:
     parent_files: Files
     feedback: tuple[str, ...]  # scorer details of the parent (debug) – advisory
     journal: Journal
+    reported_failures: tuple[str, ...] = ()  # failures reported from real use (triggers.py batch)
 
 
 @dataclass(frozen=True)
@@ -236,7 +238,32 @@ class SearchResult:
 
     def accepted_for_review(self, minimum_delta: float = 0.01) -> bool:
         node = self.recommended
-        return node.is_good and node.id != self.root.id and node.total >= self.root.total + minimum_delta
+        return (
+            node.is_good
+            and node.id != self.root.id
+            and node.total >= self.root.total + minimum_delta
+            and bool(node.meta.get("verdict", {}).get("gate_ok", False))
+        )
+
+    def rejection_reason(self, minimum_delta: float = 0.01) -> str:
+        """Why the recommended node does not qualify (empty when accepted) — feeds the commit log."""
+        node = self.recommended
+        if node.id == self.root.id:
+            return self.stopped_reason or "best is the baseline (no proposal beat it)"
+        if node.is_violation:
+            return "policy violation: " + "; ".join(node.policy_violations)
+        if node.runner_errors:
+            return f"runner errors: {', '.join(node.runner_errors)}"
+        if node.critical_regressions:
+            return f"critical regressions: {', '.join(node.critical_regressions)}"
+        if node.regressions:
+            return f"regressions: {', '.join(node.regressions)}"
+        verdict = node.meta.get("verdict") or {}
+        if not verdict.get("gate_ok", False):
+            return str(verdict.get("gate_reason") or "verdict gate failed")
+        if node.total < self.root.total + minimum_delta:
+            return f"delta {node.total - self.root.total:+.2f} below minimum {minimum_delta}"
+        return ""
 
     def recommended_diff(self) -> str:
         return unified_diff(self.base_files, self.files_by_node[self.recommended.id])
@@ -295,8 +322,10 @@ def run_search(
     validation: ValidationPolicy | None = None,
     journal: Journal | None = None,
     run_id: str | None = None,
+    reported_failures: Sequence[str] = (),
 ) -> SearchResult:
     config = config or SearchConfig()
+    reported = tuple(reported_failures)
     validation = validation or ValidationPolicy()
     rng = random.Random(config.seed)
     clock = _Clock(config.wall_seconds, config.max_evaluations)
@@ -334,6 +363,8 @@ def run_search(
     files_by_node[root.id] = dict(base)
     if isinstance(maker, FixtureTreeMaker):
         maker.bind(root, None)
+    if reported:
+        journal.event("reported_failures", count=len(reported))
 
     result = SearchResult(journal=journal, root=root, best=root, minimal=None, files_by_node=files_by_node, base_files=base)
     if baseline_runner_errors:
@@ -402,7 +433,7 @@ def run_search(
                 runner_errors=tuple(runner_errors),
                 debug_depth=depth,
                 scores=scores,
-                meta=meta,
+                meta={**meta, "verdict": compare(baseline_scores, scores).to_dict()},
             )
         journal.append(node)
         files_by_node[node.id] = dict(new_files)
@@ -486,6 +517,7 @@ def run_search(
                     parent_files=parent_files,
                     feedback=feedback_for(parent),
                     journal=journal,
+                    reported_failures=reported,
                 )
                 proposal = maker.propose(request)
                 if proposal is None:
