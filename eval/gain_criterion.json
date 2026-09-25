@@ -1,0 +1,8 @@
+{
+  "control_runs_min": 3,
+  "sd_multiplier": 2.0,
+  "one_sided": true,
+  "metric": "candidate_total",
+  "registered_at": "2026-09-03",
+  "note": "Preregistered before any live candidate was measured (Reef/SkillClaw stats.py convention): an RSI gain may only be claimed when the candidate total on the identical suite digest exceeds the control mean (baseline vs baseline, >= 3 runs) by more than 2 control standard deviations, one sided. A deterministic control (sd = 0) degenerates to 'strictly above the mean' and is flagged. Editing this file is an eval change (CLAUDE.md rule 2), never part of a candidate."
+}

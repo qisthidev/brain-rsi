@@ -20,6 +20,7 @@ def score_case(case: EvalCase, output: CandidateOutput) -> ScoreResult:
             critical=case.critical,
             runner_error=output.error,
             details=[f"runner error: {output.error}"],
+            unscored=True,
         )
 
     forbidden_hits = [phrase for phrase in case.forbidden if phrase.casefold() in text]

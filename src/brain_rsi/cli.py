@@ -10,12 +10,17 @@ from pathlib import Path
 
 from .benchmark import BenchmarkReport, run_benchmark
 from .candidate import FixtureCandidate, FixtureConfig
-from .cycle import make_decision, make_search_decision, write_decision
+from .commits import CommitLog
+from .cycle import CycleDecision, make_decision, make_search_decision, write_decision
+from .gain import ControlLog, GainCriterion, GainError, evaluate_gain, suite_digest
 from .ingest import SNAPSHOT_DIR, IngestError, ingest_source, load_manifest
 from .journal import Journal
 from .live import CcxClient, CcxError, CcxMaker
 from .proposals import ImprovementProposal, ProposalError, check_novelty, load_proposals, write_proposal
+from .reports import ReportError, ReportStore
 from .review import review_candidate
+from .triggers import FailureWindow, next_batch, status as trigger_status
+from .versions import VersionError, VersionLedger
 from .loader import load_eval_cases, select_cases
 from .search import DEFAULT_STAGES, FixtureTreeMaker, SearchConfig, StageConfig, run_search
 from .treeviz import render_tree_html
@@ -29,6 +34,11 @@ DEFAULT_BRAIN = PROJECT_ROOT.parent / "brain"
 DEFAULT_REGISTRY = PROJECT_ROOT / "sources" / "registry.json"
 DEFAULT_INGEST_ROOT = PROJECT_ROOT / "ingest"
 DEFAULT_PROPOSALS = PROJECT_ROOT / "proposals"
+DEFAULT_REPORTS = PROJECT_ROOT / "traces" / "reports.jsonl"
+DEFAULT_COMMITS = PROJECT_ROOT / "traces" / "commits.jsonl"
+DEFAULT_CONTROL = PROJECT_ROOT / "traces" / "control.jsonl"
+DEFAULT_VERSIONS = PROJECT_ROOT / "patches" / "versions.jsonl"
+DEFAULT_CRITERION = PROJECT_ROOT / "eval" / "gain_criterion.json"
 
 
 def _make_parser() -> argparse.ArgumentParser:
@@ -47,6 +57,9 @@ def _make_parser() -> argparse.ArgumentParser:
             default=None,
             help="Run global cases plus cases grounded in this source id (default: every case).",
         )
+        command.add_argument("--commit-log", type=Path, default=DEFAULT_COMMITS, help="Append-only outcome log.")
+        command.add_argument("--control-log", type=Path, default=DEFAULT_CONTROL)
+        command.add_argument("--gain-criterion", type=Path, default=DEFAULT_CRITERION)
 
     benchmark = subcommands.add_parser("benchmark", help="Compare fixture baseline and candidate.")
     add_shared(benchmark)
@@ -129,6 +142,64 @@ def _make_parser() -> argparse.ArgumentParser:
         help="Seed successive drafts with the hypotheses of open proposals under --proposals-dir (after a novelty check).",
     )
     search.add_argument("--proposals-dir", type=Path, default=DEFAULT_PROPOSALS)
+    search.add_argument(
+        "--from-reports",
+        action="store_true",
+        help="Run only when the failure window is full (reports with score <= --max-score, at least --batch-size); "
+        "the batch becomes the maker's reported-failure context and is marked consumed.",
+    )
+    search.add_argument("--reports", type=Path, default=DEFAULT_REPORTS)
+    search.add_argument("--batch-size", type=int, default=FailureWindow.batch_size)
+    search.add_argument("--max-score", type=float, default=FailureWindow.max_score)
+
+    receipt = subcommands.add_parser("receipt", help="Issue a receipt for a real interaction (skill/session/case/task).")
+    receipt.add_argument("kind", choices=("skill", "session", "case", "task"))
+    receipt.add_argument("ref", help="Skill name, session name, case id or task id.")
+    receipt.add_argument("--summary", default="", help="Short description (secret-scanned, no host paths).")
+    receipt.add_argument("--reports", type=Path, default=DEFAULT_REPORTS)
+
+    report = subcommands.add_parser("report", help="File a score/feedback report against one or more receipts.")
+    report.add_argument("--receipt", action="append", required=True, help="Receipt id (repeatable).")
+    report.add_argument("--score", type=float, default=None, help="0..1; omit for an unscored report (grading voided).")
+    report.add_argument("--feedback", default="", help="What went wrong / right (secret-scanned).")
+    report.add_argument("--source", choices=("human", "harness"), default="human")
+    report.add_argument("--reports", type=Path, default=DEFAULT_REPORTS)
+
+    reports = subcommands.add_parser("reports", help="Summarise receipts, reports and the failure window.")
+    reports.add_argument("--reports", type=Path, default=DEFAULT_REPORTS)
+    reports.add_argument("--batch-size", type=int, default=FailureWindow.batch_size)
+    reports.add_argument("--max-score", type=float, default=FailureWindow.max_score)
+    reports.add_argument("--json", action="store_true")
+
+    commits = subcommands.add_parser("commits", help="Show the append-only outcome log (reviews, rejects, skips, publishes).")
+    commits.add_argument("--commit-log", type=Path, default=DEFAULT_COMMITS)
+    commits.add_argument("--last", type=int, default=20)
+    commits.add_argument("--json", action="store_true")
+
+    version = subcommands.add_parser("version", help="Version chain of the agent surface (recorded after human ACC only).")
+    version.add_argument("action", choices=("check", "publish", "list"))
+    version.add_argument("--root", type=Path, default=PROJECT_ROOT, help="Checkout whose surface is fingerprinted.")
+    version.add_argument("--ledger", type=Path, default=DEFAULT_VERSIONS)
+    version.add_argument("--decision", type=Path, default=None, help="Accepted decision artifact under patches/.")
+    version.add_argument("--acc", default=None, help="Verbatim ACC line, e.g. 'ACC <owner> (review session, 14:05): apply diff X'.")
+    version.add_argument("--note", default="")
+    version.add_argument("--seed", action="store_true", help="Record the current surface as v1 without a decision.")
+    version.add_argument("--commit-log", type=Path, default=DEFAULT_COMMITS)
+    version.add_argument("--json", action="store_true")
+
+    gain = subcommands.add_parser("gain", help="Preregistered gain criterion: control runs and improvement claims.")
+    gain.add_argument("action", choices=("control", "claim", "show"))
+    gain.add_argument("--runs", type=int, default=3, help="control: number of baseline-vs-baseline runs to append.")
+    gain.add_argument("--decision", type=Path, default=None, help="claim: decision artifact to test.")
+    gain.add_argument("--cases", type=Path, default=PROJECT_ROOT / "eval" / "cases.json")
+    gain.add_argument("--case-source", default=None)
+    gain.add_argument("--baseline", default="baseline")
+    gain.add_argument("--budget-steps", type=int, default=DEFAULT_BUDGET_STEPS)
+    gain.add_argument("--budget-seconds", type=float, default=DEFAULT_BUDGET_SECONDS)
+    gain.add_argument("--control-log", type=Path, default=DEFAULT_CONTROL)
+    gain.add_argument("--gain-criterion", type=Path, default=DEFAULT_CRITERION)
+    gain.add_argument("--commit-log", type=Path, default=DEFAULT_COMMITS)
+    gain.add_argument("--json", action="store_true")
 
     proposal = subcommands.add_parser("proposal", help="Ideation: list, create or novelty-check improvement proposals.")
     proposal.add_argument("action", choices=("list", "new", "check"))
@@ -220,13 +291,79 @@ def cmd_cycle(args: argparse.Namespace) -> int:
         report = _benchmark(args)
 
     _print_report(report)
-    decision = make_decision(report, source_id=source_id, source_digest=source_digest)
-    print(f"decision: {'ACCEPT FOR HUMAN REVIEW' if decision.accepted_for_review else 'REJECT'}")
+    suite = suite_digest(args.cases)
+    decision = make_decision(
+        report,
+        source_id=source_id,
+        source_digest=source_digest,
+        suite_digest=suite,
+        gain=_gain_for(args, baseline_id=report.baseline_id, suite=suite, candidate_total=report.candidate_total),
+    )
+    print(f"verdict: {report.verdict().short()} — {decision.verdict['gate_reason']}")
+    print(f"decision: {'ACCEPT FOR HUMAN REVIEW' if decision.accepted_for_review else 'REJECT'}"
+          + (f" ({decision.rejection_reason})" if decision.rejection_reason else ""))
     print("promotion: disabled; a human-reviewed patch or PR is required")
+    path = None
     if args.write_decision:
         path = write_decision(decision, PROJECT_ROOT / "patches")
         print(f"decision artifact: {path}")
+    _commit(args, decision, command="cycle", decision_path=path)
     return 0 if decision.accepted_for_review else 1
+
+
+def _gain_for(args: argparse.Namespace, *, baseline_id: str, suite: str, candidate_total: float) -> dict | None:
+    """Preregistered gain verdict when control runs exist for this baseline/suite; None otherwise."""
+    criterion_path = getattr(args, "gain_criterion", DEFAULT_CRITERION)
+    control_path = getattr(args, "control_log", DEFAULT_CONTROL)
+    if not Path(criterion_path).is_file():
+        return None
+    controls = ControlLog(control_path).matching(baseline_id=baseline_id, suite=suite)
+    if not controls:
+        return None
+    verdict = evaluate_gain(GainCriterion.load(Path(criterion_path)), controls, candidate_total)
+    payload = verdict.to_dict()
+    payload["criterion"] = str(criterion_path)
+    return payload
+
+
+def _commit(
+    args: argparse.Namespace,
+    decision: CycleDecision,
+    *,
+    command: str,
+    decision_path: Path | None,
+    skipped_reason: str | None = None,
+) -> None:
+    log_path = getattr(args, "commit_log", None)
+    if log_path is None:
+        return
+    if skipped_reason is not None:
+        outcome, reason = "skipped", skipped_reason
+    elif decision.accepted_for_review:
+        outcome, reason = "review", decision.verdict["gate_reason"] if decision.verdict else "accepted"
+    else:
+        outcome, reason = "rejected", decision.rejection_reason or "gate failed"
+    rel = None
+    if decision_path is not None:
+        try:
+            rel = str(decision_path.resolve().relative_to(PROJECT_ROOT))
+        except ValueError:
+            rel = str(decision_path)
+    CommitLog(log_path).record(
+        run_id=decision.run_id,
+        command=command,
+        outcome=outcome,
+        reason=reason,
+        baseline_id=decision.baseline_id,
+        candidate_id=decision.candidate_id,
+        baseline_total=decision.baseline_total,
+        candidate_total=decision.candidate_total,
+        verdict=decision.verdict,
+        batch_id=decision.batch_id,
+        decision_path=rel,
+        meta={"suite_digest": decision.suite_digest, "gain": decision.gain},
+    )
+    print(f"commit log: {outcome} — {reason}")
 
 
 def _parse_stage_iters(spec: str | None) -> tuple[StageConfig, ...]:
@@ -314,6 +451,30 @@ def cmd_search(args: argparse.Namespace) -> int:
         wall_seconds=args.wall_seconds,
     )
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    suite = suite_digest(args.cases)
+    store: ReportStore | None = None
+    batch = None
+    reported_failures: list[str] = []
+    if args.from_reports:
+        window = FailureWindow(max_score=args.max_score, batch_size=args.batch_size)
+        store = ReportStore(args.reports)
+        batch = next_batch(store, window)
+        if batch is None:
+            state = trigger_status(store, window)
+            reason = (
+                f"nothing batched: {state['pending_failures']} failing report(s) pending, "
+                f"window needs {window.batch_size} (score <= {window.max_score:g})"
+            )
+            print(f"[search] {reason}; no proposal, no evaluation")
+            if getattr(args, "commit_log", None):
+                CommitLog(args.commit_log).record(run_id=run_id, command="search", outcome="skipped", reason=reason,
+                                                  meta={"suite_digest": suite, "window": window.to_dict()})
+                print(f"commit log: skipped — {reason}")
+            return 0
+        reported_failures = batch.failure_lines(store)
+        print(f"[search] failure window full: {len(batch.reports)} report(s) batched as maker context")
+        if not live:
+            print("[search] note: the fixture maker ignores reported failures; they only steer --maker ccx")
     journal_path = None if args.no_journal else args.journal_dir / f"{run_id}.jsonl"
     journal = Journal(run_id, path=journal_path)
 
@@ -379,7 +540,12 @@ def cmd_search(args: argparse.Namespace) -> int:
             config,
             validation=ValidationPolicy(allowlist=allowlist, denylist=denylist),
             journal=journal,
+            reported_failures=reported_failures,
         )
+    batch_id = None
+    if store is not None and batch is not None:
+        batch_id = store.record_batch(batch.report_ids, run_id=run_id, window=batch.window.to_dict()).batch_id
+        print(f"[search] batch {batch_id} consumed by run {run_id}")
 
     print(f"run_id: {run_id}")
     print(f"journal: {journal_path or '(memory only)'}")
@@ -466,13 +632,161 @@ def cmd_search(args: argparse.Namespace) -> int:
     decision = make_search_decision(
         result, source_id=source_id, journal_path=artifact_journal, usage=usage, models=models,
         reviews=reviews, html_path=artifact_html, proposals=proposals_used or None,
+        suite_digest=suite, batch_id=batch_id,
+        gain=_gain_for(args, baseline_id=result.root.candidate_id, suite=suite, candidate_total=result.recommended.total),
     )
-    print(f"decision: {'ACCEPT FOR HUMAN REVIEW' if decision.accepted_for_review else 'REJECT'}")
+    if decision.verdict:
+        print(f"verdict: W{len(decision.verdict['wins'])} L{len(decision.verdict['losses'])} "
+              f"T{decision.verdict['ties']} U{len(decision.verdict['unscored'])} — {decision.verdict['gate_reason']}")
+    print(f"decision: {'ACCEPT FOR HUMAN REVIEW' if decision.accepted_for_review else 'REJECT'}"
+          + (f" ({decision.rejection_reason})" if decision.rejection_reason else ""))
     print("promotion: disabled; a human-reviewed patch or PR is required")
+    path = None
     if args.write_decision:
         path = write_decision(decision, PROJECT_ROOT / "patches")
         print(f"decision artifact: {path}")
+    skipped = None
+    if result.recommended.id == result.root.id:
+        skipped = "no proposal beat the baseline: " + (result.stopped_reason or "best is the baseline")
+    _commit(args, decision, command="search", decision_path=path, skipped_reason=skipped)
     return 0 if decision.accepted_for_review else 1
+
+
+def cmd_receipt(args: argparse.Namespace) -> int:
+    receipt = ReportStore(args.reports).issue_receipt(args.kind, args.ref, summary=args.summary)
+    print(receipt.receipt_id)
+    return 0
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    report = ReportStore(args.reports).report(args.receipt, score=args.score, feedback=args.feedback, source=args.source)
+    score = "unscored" if report.score is None else f"{report.score:.2f}"
+    print(f"{report.report_id}: {len(report.receipt_ids)} receipt(s), score {score}")
+    return 0
+
+
+def cmd_reports(args: argparse.Namespace) -> int:
+    store = ReportStore(args.reports)
+    window = FailureWindow(max_score=args.max_score, batch_size=args.batch_size)
+    payload = {"store": store.summary(), "trigger": trigger_status(store, window)}
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    summary, trig = payload["store"], payload["trigger"]
+    print(f"reports: {summary['reports']} ({summary['failing_reports']} failing, {summary['unscored_reports']} unscored), "
+          f"receipts: {summary['receipts']} ({summary['unreported_receipts']} unreported), batches: {summary['batches']}")
+    print(f"window: score <= {window.max_score:g}, batch {window.batch_size}; pending failures {trig['pending_failures']}; "
+          + ("READY — `search --from-reports` will run" if trig["ready"] else f"needs {trig['missing']} more"))
+    for receipt in store.unreported_receipts()[-10:]:
+        print(f"  unreported {receipt.receipt_id} {receipt.kind}:{receipt.ref} {receipt.at[:19]}")
+    return 0
+
+
+def cmd_commits(args: argparse.Namespace) -> int:
+    log = CommitLog(args.commit_log)
+    entries = log.tail(args.last)
+    if args.json:
+        print(json.dumps([e.to_dict() for e in entries], indent=2, sort_keys=True))
+        return 0
+    counts = log.counts()
+    print("  ".join(f"{k}={v}" for k, v in counts.items()))
+    for entry in entries:
+        totals = ""
+        if entry.baseline_total is not None and entry.candidate_total is not None:
+            totals = f" {entry.baseline_total:.2f}->{entry.candidate_total:.2f}"
+        print(f"{entry.at[:19]} {entry.command:<7} {entry.outcome:<9}{totals} {entry.reason}")
+    return 0
+
+
+def cmd_version(args: argparse.Namespace) -> int:
+    ledger = VersionLedger(args.ledger)
+    if args.action == "list":
+        for v in ledger:
+            print(f"{v.version:<5} {v.at[:19]} {v.surface_digest[:12]} {len(v.files)} files  {v.acc[:70]}")
+        if not len(ledger):
+            print("no versions published yet (`version publish --seed --acc ...` records the current surface as v1)")
+        return 0
+    if args.action == "check":
+        state = ledger.check(args.root)
+        if args.json:
+            print(json.dumps(state, indent=2, sort_keys=True))
+        else:
+            print(f"surface {state['status']}" + (f" (latest {state['latest']})" if state["latest"] else ""))
+            for path in state["changed"][:20]:
+                print(f"  differs: {path}")
+        return 0 if state["status"] in ("current", "unversioned") else 1
+    if not args.acc:
+        raise VersionError("--acc is required to publish (promotion is a human decision)")
+    version = ledger.publish(
+        args.root,
+        acc=args.acc,
+        decision_path=args.decision,
+        note=args.note,
+        require_decision=not args.seed,
+    )
+    print(f"published {version.version}: digest {version.surface_digest[:12]}, {len(version.files)} files")
+    if getattr(args, "commit_log", None):
+        CommitLog(args.commit_log).record(
+            run_id=version.run_id or version.version,
+            command="publish",
+            outcome="published",
+            reason=version.acc,
+            candidate_id=version.candidate_id or "",
+            decision_path=version.decision_path,
+            meta={"version": version.version, "surface_digest": version.surface_digest},
+        )
+    return 0
+
+
+def cmd_gain(args: argparse.Namespace) -> int:
+    criterion = GainCriterion.load(args.gain_criterion)
+    log = ControlLog(args.control_log)
+    suite = suite_digest(args.cases)
+    if args.action == "show":
+        payload = {"criterion": criterion.to_dict(), "suite_digest": suite,
+                   "control_runs": [r.__dict__ for r in log.matching(baseline_id=args.baseline, suite=suite)]}
+        print(json.dumps(payload, indent=2, sort_keys=True) if args.json else
+              f"criterion: mean + {criterion.sd_multiplier:g} sd over >= {criterion.control_runs_min} control runs "
+              f"(registered {criterion.registered_at}); suite {suite[:12]}; "
+              f"{len(payload['control_runs'])} control run(s) for baseline {args.baseline!r}")
+        return 0
+    if args.action == "control":
+        if args.runs < 1:
+            raise ValueError("--runs must be >= 1")
+        cases = select_cases(load_eval_cases(args.cases), args.case_source)
+        baseline = _load_fixture(args.baseline)
+        for _ in range(args.runs):
+            report = run_benchmark(cases, baseline, _load_fixture(args.baseline),
+                                   budget_steps=args.budget_steps, budget_seconds=args.budget_seconds)
+            run = log.record(run_id=report.run_id, baseline_id=report.baseline_id, suite=suite,
+                             total=report.candidate_total, max_points=report.max_points,
+                             runner_errors=report.runner_errors())
+            print(f"control {run.run_id}: {run.total:.2f} / {run.max_points:.2f}")
+        controls = log.matching(baseline_id=args.baseline, suite=suite)
+        print(f"{len(controls)} control run(s) recorded for baseline {args.baseline!r} on suite {suite[:12]}")
+        return 0
+    if args.decision is None or not args.decision.is_file():
+        raise GainError("claim requires --decision <patches/...json>")
+    decision = json.loads(args.decision.read_text(encoding="utf-8"))
+    if decision.get("suite_digest") and decision["suite_digest"] != suite:
+        raise GainError("decision was measured on a different suite digest; a claim needs the identical suite")
+    controls = log.matching(baseline_id=str(decision["baseline_id"]), suite=suite)
+    verdict = evaluate_gain(criterion, controls, float(decision["candidate_total"]))
+    if args.json:
+        print(json.dumps(verdict.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(f"gain claim: {'SUPPORTED' if verdict.claim else 'NOT SUPPORTED'} — {verdict.reason}")
+        if not decision.get("accepted_for_review"):
+            print("note: the decision itself was not accepted for review; a gain claim does not override the gates")
+    if getattr(args, "commit_log", None):
+        CommitLog(args.commit_log).record(
+            run_id=str(decision.get("run_id", "")), command="gain", outcome="review" if verdict.claim else "rejected",
+            reason=("gain claim supported: " if verdict.claim else "gain claim not supported: ") + verdict.reason,
+            baseline_id=str(decision.get("baseline_id", "")), candidate_id=str(decision.get("candidate_id", "")),
+            candidate_total=float(decision["candidate_total"]), decision_path=str(args.decision),
+            meta={"suite_digest": suite, "gain": verdict.to_dict()},
+        )
+    return 0 if verdict.claim else 1
 
 
 def cmd_proposal(args: argparse.Namespace) -> int:
@@ -609,7 +923,20 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_sources(args)
         if args.command == "ingest":
             return cmd_ingest(args)
-    except (FileNotFoundError, ValueError, RegistryError, IngestError, CcxError, ProposalError) as exc:
+        if args.command == "receipt":
+            return cmd_receipt(args)
+        if args.command == "report":
+            return cmd_report(args)
+        if args.command == "reports":
+            return cmd_reports(args)
+        if args.command == "commits":
+            return cmd_commits(args)
+        if args.command == "version":
+            return cmd_version(args)
+        if args.command == "gain":
+            return cmd_gain(args)
+    except (FileNotFoundError, ValueError, RegistryError, IngestError, CcxError, ProposalError,
+            ReportError, VersionError, GainError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 2

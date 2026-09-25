@@ -90,6 +90,34 @@ Eval cases may carry a `source` field. `--case-source <id>` runs the global case
 PYTHONPATH=src python3 -m brain_rsi.cli cycle --source-id brain --case-source brain --snapshot-source --write-decision
 ```
 
+## Observation loop borrowed from Reef (`receipt` → `report` → failure window → `search`)
+
+[Reef](https://github.com/Human-Agent-Society/reef) (Human-Agent Society, 2026) runs a serve → observe →
+grow → commit loop for agent harnesses. Six of its mechanisms are ported here as separately reviewed,
+offline-testable pieces (see the v0.2.0 release notes for the comparison). Promotion stays manual.
+
+| Piece | Module | What it adds |
+|---|---|---|
+| Receipts + reports | `reports.py` | `brain-rsi receipt <kind> <ref>` issues a receipt for a real interaction (skill, session, case, task); `brain-rsi report --receipt ID --score 0..1 --feedback "..."` files feedback against it. Append-only `traces/reports.jsonl`; unknown receipts, scores outside [0, 1], secrets and host paths are refused. An unscored report (`--score` omitted) is a sentinel, never a fake zero. |
+| Failure window | `triggers.py` | `search --from-reports [--batch-size N --max-score X]` runs only when at least N unbatched reports fall inside the window; the batch becomes the maker's "failures reported from real use" context (`--maker ccx`) and is marked consumed in the store. Otherwise: nothing batched, no proposal, no evaluation. |
+| Verdict gate | `verdict.py` | Every comparison also yields per-case win / loss / tie / **unscored** (runner error on either side). A candidate is accepted only with `losses == 0`, `unscored == 0` and at least one win — a total-points gain can no longer hide a case that lost points without flipping pass→fail. Traces, decisions and journal nodes carry the verdict. |
+| Commit log | `commits.py` | `traces/commits.jsonl`: one line per outcome — `review`, `rejected`, `skipped` (nothing batched, no proposal beat the baseline, baseline failed) and `published` — so an idle loop is distinguishable from a broken one. `brain-rsi commits`. |
+| Version chain | `versions.py` | After a human applies a reviewed diff, `brain-rsi version publish --decision patches/<run>.json --acc "ACC Rama (...): ..."` fingerprints the live surface (`agent/`, `.claude/skills/`) into `patches/versions.jsonl`. Refuses a non-accepted decision, a malformed ACC line, a reused decision or an unchanged surface. `brain-rsi version check [--root <checkout>]` answers `current` / `ahead` / `behind` for any worker checkout; nothing is applied automatically. |
+| Gain criterion | `gain.py` | `eval/gain_criterion.json` is preregistered (mean + 2 sd over ≥ 3 control runs, one sided). `brain-rsi gain control --runs N` appends baseline-vs-baseline runs keyed by the suite digest; `brain-rsi gain claim --decision <artifact>` says whether the candidate clears the threshold on the identical suite. A deterministic control (sd = 0, i.e. fixtures) never supports a claim. |
+
+Not ported on purpose: Reef's `selection: always` regime (publish every non-skip night), weight training, and the
+inference proxy. The eval suite, scorer and gates remain outside the candidate's reach (CLAUDE.md rules 1–2).
+
+```bash
+PYTHONPATH=src python3 -m brain_rsi.cli receipt skill greeting --summary "briefing pagi"
+PYTHONPATH=src python3 -m brain_rsi.cli report --receipt rcpt-… --score 0 --feedback "lupa Today Focus"
+PYTHONPATH=src python3 -m brain_rsi.cli reports                       # window status
+PYTHONPATH=src python3 -m brain_rsi.cli search --from-reports          # skips until the window is full
+PYTHONPATH=src python3 -m brain_rsi.cli commits
+PYTHONPATH=src python3 -m brain_rsi.cli version check
+PYTHONPATH=src python3 -m brain_rsi.cli gain control --runs 3 && PYTHONPATH=src python3 -m brain_rsi.cli gain claim --decision patches/<run>.json
+```
+
 ## Tree search over candidates (`search`)
 
 `cycle` compares one baseline with one candidate. `search` (2026-08-19, offline) runs the

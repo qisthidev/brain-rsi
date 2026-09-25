@@ -64,6 +64,7 @@ class ScoreResult:
     critical: bool
     runner_error: str | None = None
     details: list[str] = field(default_factory=list)
+    unscored: bool = False  # sentinel: grading voided by a runner error (never a fake zero)
 
 
 @dataclass
