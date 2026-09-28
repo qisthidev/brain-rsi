@@ -1,7 +1,7 @@
-# agent/ — permukaan agen brain-v2 (generasi 4)
+# agent/ — permukaan agen brain-rsi (generasi 4)
 
 Direktori ini (bersama `.claude/skills/`) adalah **satu-satunya** permukaan yang boleh
-dimutasi oleh kandidat RSI (lihat `sources/registry.json`, source `brain-v2`, role `target`).
+dimutasi oleh kandidat RSI (lihat `sources/registry.json`, source `brain-rsi`, role `target`).
 
 Isi yang direncanakan — diturunkan dari generasi 1–3 setelah `wiki/lessons/` disetujui:
 

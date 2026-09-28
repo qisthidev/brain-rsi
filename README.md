@@ -1,6 +1,6 @@
 # brain-rsi
 
-A separate, offline-first harness for testing whether a proposed change to the sibling [`brain`](../brain) agent is measurably better and still safe.
+An offline-first harness for testing whether a proposed change to this repository's own agent surface (`agent/`, `.claude/skills/`) is measurably better and still safe. Earlier brains are ingested as read-only archives under `brains/<id>/`.
 
 This project is intentionally **not** an autonomous overnight ratchet yet. It establishes the evaluation and containment layer that must exist before a live model is allowed to propose prompt or skill mutations.
 
@@ -15,19 +15,19 @@ This project is intentionally **not** an autonomous overnight ratchet yet. It es
 - Append-only JSONL traces.
 - Ephemeral source snapshot containing only allowlisted prompt/skill files.
 - Decision artifacts that may be submitted for human review.
-- No automatic write, commit, push, merge, or promotion into `../brain`.
+- No automatic write, commit, push, merge, or promotion into the target's `main`.
 - Offline fixtures, so the complete evaluation path runs without an API key or LLM.
 
 ## Trust boundary
 
 ```text
-../brain (read-only source)
+agent/ + .claude/skills/ (target surface; brains/<id>/ archives read-only)
         |
         | copy allowlisted files only
         v
 worktree/<temporary>/repo
         |
-        | candidate proposal (future live adapter)
+        | candidate proposal (fixture maker, or live maker via ccx)
         v
 immutable eval/cases.json ---> deterministic scorer
         |                             |
@@ -39,7 +39,7 @@ immutable eval/cases.json ---> deterministic scorer
                            human-reviewed patch or PR
 ```
 
-The candidate maker must not be able to alter `eval/`, `tests/`, scorer code, acceptance gates, traces, raw sources, credentials, git metadata, or `brain/main`.
+The candidate maker must not be able to alter `eval/`, `tests/`, scorer code, acceptance gates, traces, raw sources, credentials, git metadata, or the target's `main`.
 
 ## Migrated legacy brains (`brains/<id>/`)
 
@@ -155,7 +155,7 @@ through `rules`), so the whole loop runs without a model.
   decision artifact (`search.usage`, `search.models`).
 
 ```bash
-PYTHONPATH=src python3 -m brain_rsi.cli search --maker ccx --snapshot-source --source-id brain-v2 \
+PYTHONPATH=src python3 -m brain_rsi.cli search --maker ccx --snapshot-source --source-id brain-rsi \
   --maker-model gemini-3-flash --runner-model gemini-3-flash --feedback-model deepseek-v4-flash \
   --num-drafts 1 --stage-iters working=1,tuning=0,explore=0,ablation=0 --max-ccx-calls 61 --write-decision
 ```
@@ -183,7 +183,7 @@ The complete usage ledger is printed and stored.
 
 ```bash
 PYTHONPATH=src python3 -m brain_rsi.cli search --num-drafts 4 --show-diff
-PYTHONPATH=src python3 -m brain_rsi.cli search --num-drafts 4 --write-decision --snapshot-source --source-id brain-v2
+PYTHONPATH=src python3 -m brain_rsi.cli search --num-drafts 4 --write-decision --snapshot-source --source-id brain-rsi
 PYTHONPATH=src python3 -m brain_rsi.cli search --stage-iters working=4,tuning=2,explore=6,ablation=8 --seed 3
 ```
 
@@ -202,7 +202,7 @@ PYTHONPATH=src python3 -m brain_rsi.cli benchmark
 PYTHONPATH=src python3 -m brain_rsi.cli cycle
 ```
 
-`benchmark` appends an observation to `traces/runs.jsonl` (ignored by Git). `cycle` is dry-run-safe by default: it evaluates fixtures but neither snapshots nor changes `brain`.
+`benchmark` appends an observation to `traces/runs.jsonl` (ignored by Git). `cycle` is dry-run-safe by default: it evaluates fixtures but neither snapshots nor changes the target surface.
 
 To demonstrate the allowlisted ephemeral snapshot and write a review decision:
 
@@ -255,15 +255,15 @@ patches/                  local review decisions (ignored)
 worktree/                 ephemeral allowlisted snapshots (ignored)
 ```
 
-## Adding a live adapter later
+## Adding another live adapter
 
-A future adapter can implement `CandidateRunner` in `src/brain_rsi/candidate.py`. Before enabling it, it must:
+`live.py` is the reference implementation. Any further adapter implements `CandidateRunner` in `src/brain_rsi/candidate.py` and, before it is enabled, must:
 
 - execute only inside `candidate_workspace`;
 - receive no secrets or unrelated raw content;
 - enforce subprocess timeout and process termination itself;
 - expose token/cost/step measurements;
-- write a patch rather than modifying `brain`;
+- write a patch rather than modifying the target surface;
 - use a checker independent from the candidate maker;
 - keep eval cases and acceptance policy inaccessible to candidate mutation.
 

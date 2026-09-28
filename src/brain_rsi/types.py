@@ -8,7 +8,7 @@ DEFAULT_BUDGET_STEPS = 100
 DEFAULT_BUDGET_SECONDS = 60.0
 
 # A candidate may propose changes only to these paths in its isolated workspace.
-# Mirrors sources/registry.json (source brain-v2, role target): the agent surface only.
+# Mirrors sources/registry.json (source brain-rsi, role target): the agent surface only.
 TARGET_MUTABLE_ALLOWLIST = (
     "agent/",
     ".claude/skills/",

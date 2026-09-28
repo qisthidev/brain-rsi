@@ -25,7 +25,7 @@ PYTHONPATH=src python3 -m brain_rsi.cli cycle
 PYTHONPATH=src python3 -m brain_rsi.cli ingest
 ```
 
-The default CLI uses offline fixtures. Adding a live model adapter is a separate reviewed change and must preserve all boundaries above.
+The default CLI uses offline fixtures. The live `ccx` adapter (`src/brain_rsi/live.py`) is opt-in via `--maker ccx --maker-model/--runner-model` and must preserve all boundaries above; any further model adapter is a separate reviewed change.
 
 ## Daily content (optional)
 
