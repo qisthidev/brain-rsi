@@ -24,13 +24,12 @@ from .versions import VersionError, VersionLedger
 from .loader import load_eval_cases, select_cases
 from .search import DEFAULT_STAGES, FixtureTreeMaker, SearchConfig, StageConfig, run_search
 from .treeviz import render_tree_html
-from .sandbox import candidate_workspace
+from .sandbox import SandboxError, candidate_workspace
 from .sources import RegistryError, find_source, load_registry
 from .validator import ValidationPolicy
 from .types import DEFAULT_BUDGET_SECONDS, DEFAULT_BUDGET_STEPS, TARGET_MUTABLE_ALLOWLIST, TARGET_MUTABLE_DENYLIST
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BRAIN = PROJECT_ROOT.parent / "brain"
 DEFAULT_REGISTRY = PROJECT_ROOT / "sources" / "registry.json"
 DEFAULT_INGEST_ROOT = PROJECT_ROOT / "ingest"
 DEFAULT_PROPOSALS = PROJECT_ROOT / "proposals"
@@ -76,7 +75,12 @@ def _make_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Demonstrate an ephemeral allowlisted snapshot of the source repository.",
     )
-    cycle.add_argument("--source", type=Path, default=DEFAULT_BRAIN)
+    cycle.add_argument(
+        "--source",
+        type=Path,
+        default=None,
+        help="Repository to snapshot (default with --snapshot-source: the registry's role=target source).",
+    )
     cycle.add_argument(
         "--source-id",
         default=None,
@@ -260,8 +264,14 @@ def cmd_cycle(args: argparse.Namespace) -> int:
     denylist: tuple[str, ...] = TARGET_MUTABLE_DENYLIST
     source_id: str | None = None
     source_digest: str | None = None
-    if args.source_id:
-        spec = find_source(load_registry(args.registry, base_dir=PROJECT_ROOT), args.source_id)
+    requested_id = args.source_id
+    if requested_id is None and source_path is None and args.snapshot_source:
+        targets = [spec for spec in load_registry(args.registry, base_dir=PROJECT_ROOT) if spec.is_target]
+        if len(targets) != 1:
+            raise RegistryError("--snapshot-source without --source/--source-id needs exactly one role=target source")
+        requested_id = targets[0].id
+    if requested_id:
+        spec = find_source(load_registry(args.registry, base_dir=PROJECT_ROOT), requested_id)
         if not spec.is_target:
             raise RegistryError(
                 f"source {spec.id!r} has role {spec.role!r}; only the role=target source may be an RSI candidate target"
@@ -936,7 +946,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "gain":
             return cmd_gain(args)
     except (FileNotFoundError, ValueError, RegistryError, IngestError, CcxError, ProposalError,
-            ReportError, VersionError, GainError) as exc:
+            ReportError, VersionError, GainError, SandboxError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 2
