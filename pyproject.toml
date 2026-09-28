@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "brain-rsi"
-version = "0.1.0"
+version = "2.1.2"
 description = "Safe, measurable RSI evaluation harness for a Markdown second brain"
 requires-python = ">=3.11"
 dependencies = []
